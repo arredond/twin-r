@@ -59,6 +59,7 @@ class TwinRStack(Stack):
                 "TWIN_R_BUILDINGS_PATH": f"s3://{data_bucket.bucket_name}/exposure/buildings.parquet",
                 "TWIN_R_EXPOSURE_PATH": f"s3://{data_bucket.bucket_name}/exposure/exposure.parquet",
                 "TWIN_R_FRAGILITY_PATH": f"s3://{data_bucket.bucket_name}/fragility/fragility.parquet",
+                "TWIN_R_MUNICIPALITIES_PATH": f"s3://{data_bucket.bucket_name}/exposure/municipalities.parquet",
                 "TWIN_R_RESULTS_BUCKET": results_bucket.bucket_name,
             },
         )

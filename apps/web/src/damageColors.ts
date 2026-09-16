@@ -13,3 +13,9 @@ export const DAMAGE_COLORS: Record<string, string> = {
 
 export const DAMAGE_STATES = ["None", "Slight", "Moderate", "Extensive", "Complete"] as const;
 export type DamageState = (typeof DAMAGE_STATES)[number];
+
+// A neutral tone independent of DAMAGE_COLORS on purpose -- debris is a
+// separate concept from a building's own damage color (matching MERISUR's
+// own separate "Load debris on map" toggle, docs/merisur.md §5), not a
+// restatement of it.
+export const DEBRIS_COLOR = "#5c4433";
