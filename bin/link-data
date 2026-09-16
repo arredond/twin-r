@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# link-data: symlink this worktree's gitignored data directories --
+# `data/` (pipeline outputs, read by services/scenario) and
+# `apps/web/public/data/` (the frontend's PMTiles copies) -- to the ones
+# already generated in the repo's main worktree, instead of re-running the
+# multi-hour exposure/debris ETL (see pipelines/README.md) for every
+# worktree.
+#
+# Safe to run any time: it only ever replaces an *empty* directory or a
+# stale symlink with a fresh symlink -- it refuses to touch a directory
+# that already has files in it, so it never risks deleting real data (e.g.
+# accidentally run from the main worktree itself, or a worktree that
+# already ran its own pipelines).
+#
+# Usage: bin/link-data   (run from anywhere inside a worktree)
+
+set -euo pipefail
+
+WORKTREE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# `git worktree list` always lists the main worktree first (the one whose
+# working directory matches the repo's own $GIT_DIR, i.e. .git is a real
+# directory there rather than a `gitdir:` pointer file) -- exactly the
+# checkout the multi-hundred-MB/GB pipeline outputs actually live in.
+MAIN_ROOT="$(git -C "$WORKTREE_ROOT" worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
+
+if [ "$MAIN_ROOT" = "$WORKTREE_ROOT" ]; then
+  echo "link-data: this is the main worktree ($MAIN_ROOT) -- nothing to link, it's the source." >&2
+  exit 0
+fi
+
+link_dir() {
+  local relative_path="$1"
+  local target="$MAIN_ROOT/$relative_path"
+  local link="$WORKTREE_ROOT/$relative_path"
+
+  if [ ! -e "$target" ]; then
+    echo "link-data: skipping $relative_path -- not found at $target (run its pipeline there first)" >&2
+    return
+  fi
+  if [ -L "$link" ]; then
+    rm "$link"
+  elif [ -e "$link" ]; then
+    if [ -d "$link" ] && [ -z "$(ls -A "$link" 2>/dev/null)" ]; then
+      rmdir "$link"
+    else
+      echo "link-data: refusing to touch $relative_path -- already exists and isn't empty" >&2
+      return
+    fi
+  fi
+  mkdir -p "$(dirname "$link")"
+  ln -s "$target" "$link"
+  echo "link-data: $relative_path -> $target"
+}
+
+link_dir "data"
+link_dir "apps/web/public/data"
