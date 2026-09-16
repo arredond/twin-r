@@ -82,6 +82,16 @@ those env vars before `twinr start` to point at a different one, e.g. the
 single-municipality Lorca dataset from step 1 instead of a region crawl
 from step 1b.
 
+## Working in multiple worktrees
+
+`data/` and `apps/web/public/data/` are gitignored (the pipeline outputs
+above run into the multi-GB range) and a `git worktree` doesn't share a
+working directory with the one it was added from, so a fresh worktree has
+neither by default. Run `bin/link-data` from inside a new worktree to
+symlink both to the main worktree's copies instead of re-running the ETL
+there -- it's a no-op in the main worktree itself, and refuses to touch
+either path if it already has real content.
+
 ## Tests
 
 ```bash
