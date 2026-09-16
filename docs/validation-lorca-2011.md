@@ -184,3 +184,218 @@ error a real geometry fixes, just not in the direction intuition suggests.
 This is a plausible, explainable shift, not a red flag — but it's a
 concrete illustration of why "point near a fault" and "point on a fault's
 rupture plane" aren't the same question.
+
+## 10. Addendum: exposure/typology follow-up, and a second bug it uncovered
+
+Re-ran the §2 scenario (`uv run python -m scenario 37.699 -1.672 5.2 44`)
+against a freshly-built Lorca dataset — still **27,884/27,884 "None"**, §2's
+finding holds unchanged. This addendum digs into the exposure/typology angle
+flagged as the likely dominant contributor (§8 recommendation 1) with
+actual numbers, and surfaces a second, independent bug along the way.
+
+### 10.1 `MR_LWAL-DUL` isn't just generic — it's the *least* vulnerable
+masonry option on offer
+
+Pulled every vernacular-masonry class the same vendor repo (Martins & Silva
+2020) publishes and compared `P(≥Slight)` at a fixed SA(0.3s)=0.15g, H2:
+
+| Class | Description | P(≥Slight)@0.15g |
+|---|---|---|
+| `MUR-ADO_LWAL-DNO` | adobe | 17.5% |
+| `MUR-STRUB_LWAL-DNO` | rubble stone, no ductility | 14.6% |
+| `MUR-STDRE_LWAL-DNO` | dressed stone, no ductility | 13.7% |
+| `MUR-CL99_LWAL-DNO` | confined masonry (pre-'99 code) | 8.9% |
+| `MUR-CB99_LWAL-DNO` | confined block masonry (pre-'99 code) | 5.3% |
+| **`MR_LWAL-DUL`** | **generic masonry (our current default)** | **3.7%** |
+
+Every one of Risk-UE's five Lorca masonry sub-types (`merisur.md` §4.5) is
+almost certainly closer to one of the top rows than to our catch-all
+default — `MR_LWAL-DUL` isn't merely coarse, it's specifically the most
+optimistic choice available. `pipelines/exposure/buildings.parquet` shows
+**12,250/27,884 buildings (44%)** currently get this class, of which
+**3,149 predate 1940** — old-town-era construction most plausibly matching
+`MUR-STRUB` (Lorca's historic core is stone masonry, not adobe).
+
+### 10.2 New bug found while instrumenting this: IM type isn't tracked per curve
+
+`data/fragility/fragility.parquet` (same Martins & Silva vendor set already
+in use) mixes intensity-measure types **within** a single taxonomy class,
+by height:
+
+| `taxonomy` | `height_class` | `im_type` |
+|---|---|---|
+| `MR_LWAL-DUL` / `CR_LDUAL-DUL` | 1 | `PGA [g]` |
+| `MR_LWAL-DUL` (2–3) / `CR_LDUAL-DUL` (2–4) | | `SA(0.3s) [g]` |
+| taller | | `SA(0.6s) [g]`, then `SA(1.0s) [g]` |
+
+`ground_motion.py` computes **only** SA(0.3s) (`INTENSITY_MEASURE = SA(0.3)`,
+hardcoded), and `engine.py`/`damage.py` feed that single value into
+whichever curve a building's `(taxonomy, height)` resolves to, with no check
+of `im_type` at all. **Height-class-1 buildings — 44% of Lorca's stock — are
+being evaluated against a PGA-indexed curve using an SA(0.3s) value**, and
+buildings with `height_class ≥ 5` (SA(0.6s)/SA(1.0s)-indexed) have the same
+problem. This is a real correctness bug, independent of the typology
+question, present for every scenario run today, not Lorca-specific.
+
+Its effect isn't one-directional: at Lorca's town centre, Akkar et al.
+(2014) gives SA(0.3s)=0.218g vs. PGA=0.172g for this rupture — since SA(0.3s)
+is *larger* here, feeding it into a PGA-indexed curve currently
+**over-states** H1 damage, not under-states it (verified directly against
+`MR_LWAL-DUL_H1.csv`: this is coincidentally why §3's "9–11%" figure came out
+matching the vendored data as read today). Whether that direction holds at
+other magnitudes/distances/mechanisms isn't something to assume — this
+needs fixing on its own correctness merits, not because it's making Lorca
+better or worse.
+
+### 10.3 Quantified experiment (standalone script, not merged — see below)
+
+Built a scratch harness reusing `damage.py`'s exact probability math, run
+against the real 27,884-building Lorca exposure set, comparing **expected
+`≥Slight` count** (Σ P(exceed Slight) across all buildings — the right
+metric here; see caveat below) across four variants:
+
+| Variant | Taxonomy | IM type | Expected ≥Slight (of 27,884) |
+|---|---|---|---|
+| A — baseline (today's code) | 2 classes | always SA(0.3s) | **977** |
+| B — IM-type fix only | 2 classes | correct per curve | 626 |
+| C — typology fix only (pre-1940 masonry → `MUR-STRUB`) | 3 classes | always SA(0.3s) | **1,281** |
+| D — both fixes together | 3 classes | correct per curve | 854 |
+
+Two takeaways:
+
+1. **The typology split alone moves things the right direction, substantially**
+   (+31% vs. baseline) — confirms §8 recommendation 1's hypothesis with a
+   number, not just a plausibility argument.
+2. **Fixing the IM-type bug *without* the typology fix moves the wrong way**
+   (977 → 626), and even fixing both together nets *below* baseline
+   (854 vs. 977) — the two bugs are currently offsetting each other by
+   coincidence, not by design. Shipping the IM-type fix alone, as a "pure
+   correctness" change with no typology work attached, would look like a
+   regression against this validation case even though it's fixing a real
+   bug. **Don't land one without the other.**
+
+**Caveat on "expected count" as the metric**: modal-damage-state counting
+(what §2's headline number and the CLI both report) is structurally unable
+to show partial damage here — flipping a building's *modal* state to Slight
+needs `P(≥Slight) > 50%`, but real 2011 damage was concentrated in a
+minority of the municipality's full building stock (6,416 *inspected*,
+flagged as damaged, out of 27,884 total — §1), so most individual buildings
+legitimately have `P(≥Slight)` well under 50% even in a correctly-calibrated
+model. None of variants A–D ever produce a nonzero modal-state count at the
+whole-municipality scale for exactly this reason. Expected-value counting
+(Σ probability) is what actually reflects "how much of the stock plausibly
+took some damage," and is a better validation metric than the modal-count
+headline this doc has used so far — worth adopting alongside (not instead
+of) the modal count in future validation runs.
+
+### 10.4 Recommendations, superseding §8's recommendation 1
+
+1. **Fix the IM-type bug** (`ground_motion.py`/`fragility_lookup.py`/
+   `damage.py`/`engine.py`): compute PGA, SA(0.3s), SA(0.6s), SA(1.0s) from
+   the same Akkar et al. (2014) GMPE (it already supports all four —
+   confirmed directly), tag each vendored curve with its `im_type`
+   (already a column in `fragility.parquet`, just unused downstream), and
+   dispatch each building to the IM value matching its own curve. Same GMPE,
+   no new dependency — this is a correctness fix that's overdue regardless
+   of Lorca.
+2. **Vendor `MUR-STRUB_LWAL-DNO`** (H1–H5, comfortably covers 99.95% of
+   Lorca's masonry stock by height) alongside the existing two classes in
+   `pipelines/fragility`, and extend `taxonomy.py`'s single 1970 threshold to
+   a second one (pre-1940 → `MUR-STRUB`, 1940–1970 → `MR_LWAL-DUL`, ≥1970 →
+   `CR_LDUAL-DUL`) — exactly the refinement `taxonomy.py`'s own docstring
+   already anticipates ("refine into multiple periods once we have reason to
+   believe it changes results materially" — §10.3 is that reason, with a
+   number attached).
+3. **Land (1) and (2) together**, and re-run this exact scenario afterward —
+   §10.3 shows why doing only one is actively misleading.
+4. Real Lorca capacity curves from UPM (`questions-for-upm.md` §1) remain
+   the only path to an actual calibration rather than a plausibility check —
+   unchanged from §8 recommendation 2.
+5. Out of scope here, deliberately: site amplification (blocked on real
+   microzonation data, `questions-for-upm.md` §2) and the debris model (the
+   Lorca-specific debris dataset/pipeline was left untouched, per explicit
+   instruction). Note for later, at no cost to that constraint: debris rings
+   are derived purely from `damage_state` at render time
+   (`pipelines/exposure/src/exposure/debris.py`), so fixing (1)/(2) improves
+   debris-layer fidelity for free, with no change to the debris pipeline
+   itself. **See §10.5 below** — one ground-motion-side lever turned out not
+   to need new data at all, and is probably the single largest contributor
+   of the three.
+
+### 10.5 A third lever, found independently: the missing probability-level
+dimension, and how well it happens to fit this specific event
+
+§10.1–10.4 treat ground motion as fixed and vary only exposure/fragility.
+But `merisur.md` §4.7 documents that MERISUR's own UI exposes **three
+selectable scenario levels**, and the ground-motion percentile is one of the
+two things that changes between them, not just damage percentile:
+
+| Level | Ground motion | Damage |
+|---|---|---|
+| High probability | median | modal damage state |
+| Low probability / high impact | median + 1σ | modal damage state |
+| Very low probability / very high impact | median + 1σ | 85th-percentile damage state |
+
+`twin-r` implements none of this — `ground_motion.py` always computes the
+GMPE's bare median (`np.exp(mean[0])`, `compute_sa03`/`compute_sa03_gridded`
+in `ground_motion.py`), there's no `sigma`/percentile parameter anywhere in
+`rupture.py`, `engine.py`, `handler.py`, or `local.py`, and the CLI used for
+this whole validation (`python -m scenario`) has no way to ask for anything
+but the median. Every run in this doc, §1 through §10.4, is implicitly
+"High probability" tier only.
+
+Checked what MERISUR's own **"Low probability / high impact"** tier would
+give for this exact rupture, using the same Akkar et al. (2014) GMPE
+already wired up (`AkkarEtAlRjb2014`, which reports `sig` alongside `mean`
+— no new dependency, no new data, this is entirely unused output from a
+call the engine already makes):
+
+| | Median (today's only mode) | Median + 1σ |
+|---|---|---|
+| PGA at nearest building (Rjb=0.71km) | 0.171 g | **0.348 g** |
+| SA(0.3s) at same building | 0.217 g | 0.464 g |
+
+**Real near-fault stations recorded PGA up to ~0.36g in 2011 (§1/§3).**
+Median+1σ PGA (0.348g) lands within 3.4% of that recorded value — this
+specific event sits almost exactly at +1σ on this GMPE, which is squarely
+inside normal aleatory variability (events routinely land above or below
+the median; nothing about this is a red flag for the GMPE or an artifact of
+cherry-picking) but means **§3's framing — comparing our median-only SA(0.3s)
+output against the recorded PGA and calling them "the same order of
+magnitude" — was comparing the wrong percentile of our own model against
+reality.** The model's *median* output was never going to match a recorded
+value that happened to land near +1σ; the model's own high-impact tier
+does.
+
+Re-ran §10.3's variant D (narrower taxonomy + IM-type fix) at median+1σ
+instead of median, same 27,884 buildings, same rupture — this time with
+modal-state counts (not expected-value), since at this intensity the shift
+is large enough to actually flip modal states, not just move probabilities
+around:
+
+| Variant | Ground motion | None | Slight | Moderate+ |
+|---|---|---|---|---|
+| D (§10.3) | median | 27,884 | 0 | 0 |
+| D + high-impact tier | median + 1σ | 25,188 | 2,696 | 0 |
+
+Going from "0 buildings modally damaged" to "2,696 modally Slight" is a
+qualitative change, not a tweak — and it comes from a UI feature MERISUR
+already ships and documents, using a GMPE output twin-r's own code already
+computes and discards. This doesn't fully close the gap against the
+6,416-inspected figure (§1's caveat about inspection targeting reported
+damage, not a census, still applies — these numbers are not directly
+comparable), but it's the cheapest, most-grounded of the three levers: no
+vendoring, no taxonomy judgment calls, no blocked-on-UPM data dependency.
+
+**Added recommendation, ranked alongside §10.4:**
+
+6. **Implement the probability-level selector** (median / median+1σ ground
+   motion, modal / 85th-percentile damage — `merisur.md` §4.7): thread a
+   `sigma_multiplier` (0.0 / 1.0) through `ground_motion.py`'s existing
+   `sig` output into `compute_sa03`/`compute_sa03_gridded`, expose it as a
+   scenario parameter (CLI flag + API field + frontend selector), default to
+   today's median-only behaviour so nothing changes unless a caller asks.
+   Independent of, and complementary to, recommendations 1–2 — land in
+   either order, but land this one too. Re-run this validation at all three
+   tiers once (1), (2), and this are in, and report the full 3×3 (taxonomy ×
+   IM-fix × probability-tier) grid rather than a single number.
