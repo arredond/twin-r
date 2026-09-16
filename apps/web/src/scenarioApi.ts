@@ -1,3 +1,5 @@
+import type { DamageState } from "./damageColors";
+
 // Client for the scenario function (services/scenario). Defaults to the
 // local dev server (uvicorn scenario.local:app); override via
 // VITE_SCENARIO_API_URL for a deployed Lambda Function URL.
@@ -64,6 +66,19 @@ export interface EvaluatedRegion {
   radius_km: number;
 }
 
+// Per-municipality damage-state counts, aggregated server-side from the
+// scenario's *full* evaluated set (services/scenario/response.py's
+// compute_municipality_stats) -- powers the map's low-zoom choropleth
+// (DamageMap.tsx), joined against municipalities.pmtiles' own precomputed
+// `n_buildings` property (denominator) by `municipality_code`. Always an
+// array, empty when the backend has no municipalities dataset available
+// yet (see compute_municipality_stats's own docstring) -- not an error.
+export interface MunicipalityStats {
+  municipality_code: string;
+  n_evaluated: number;
+  counts: Record<DamageState, number>;
+}
+
 export interface ScenarioResult {
   rupture: {
     lat: number;
@@ -87,6 +102,7 @@ export interface ScenarioResult {
   buildings: BuildingDamageResult[];
   n_evaluated: number;
   elapsed_ms?: number;
+  municipality_stats: MunicipalityStats[];
 }
 
 async function postScenario(path: string, body: unknown): Promise<ScenarioResult> {

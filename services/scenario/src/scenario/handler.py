@@ -22,13 +22,16 @@ from .engine import run_scenario
 from .faults import get_fault
 from .ground_motion import estimate_significant_distance_km
 from .probability_level import resolve_probability_level
-from .response import prepare_response_buildings
+from .response import compute_municipality_stats, prepare_response_buildings
 from .rupture import Rupture, from_fault, from_manual_input
 
 BUILDINGS_PATH = os.environ.get("TWIN_R_BUILDINGS_PATH", "data/exposure/buildings.parquet")
 EXPOSURE_PATH = os.environ.get("TWIN_R_EXPOSURE_PATH", "data/exposure/exposure.parquet")
 FRAGILITY_PATH = os.environ.get("TWIN_R_FRAGILITY_PATH", "data/fragility/fragility.parquet")
 FAULTS_PATH = os.environ.get("TWIN_R_FAULTS_PATH", "data/faults/qafi_faults.parquet")
+MUNICIPALITIES_PATH = os.environ.get(
+    "TWIN_R_MUNICIPALITIES_PATH", "data/exposure/municipalities.parquet"
+)
 RESULTS_BUCKET = os.environ.get("TWIN_R_RESULTS_BUCKET")  # unset -> return inline
 
 # Default reference point when a fault-mode request doesn't include
@@ -64,6 +67,7 @@ def handler(event: dict, context) -> dict:
         damage_percentile=level_params.damage_percentile,
     )
     n_evaluated = len(result)
+    municipality_stats = compute_municipality_stats(result, MUNICIPALITIES_PATH)
     result = prepare_response_buildings(result)
     payload = {
         "rupture": {
@@ -77,6 +81,7 @@ def handler(event: dict, context) -> dict:
         "evaluated_region": {"lat": rupture.lat, "lon": rupture.lon, "radius_km": radius_km},
         "buildings": result.to_dict(orient="records"),
         "n_evaluated": n_evaluated,
+        "municipality_stats": municipality_stats,
     }
 
     if RESULTS_BUCKET is None:

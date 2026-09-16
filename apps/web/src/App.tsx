@@ -47,11 +47,6 @@ export default function App() {
   // duplicated per-mode since it means the same thing (which ground-motion/
   // damage percentile to use) regardless of how the rupture was defined.
   const [probabilityLevel, setProbabilityLevel] = useState<ProbabilityLevel>("high");
-  // Debris layer (ADR-0010): off by default, matching MERISUR's own
-  // separate "Load debris on map" action (docs/merisur.md §5) -- a static
-  // PMTiles layer, so toggling it is free, but it's visually busy stacked
-  // on top of building damage color.
-  const [showDebris, setShowDebris] = useState(false);
   const [manualParams, setManualParams] = useState<ManualParams>({
     lat: 40.4168,
     lon: -3.7038, // Madrid -- arbitrary, recognizable starting point, not seismically special
@@ -187,15 +182,6 @@ export default function App() {
           <DamageLegend />
         </div>
 
-        <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem" }}>
-          <input
-            type="checkbox"
-            checked={showDebris}
-            onChange={(e) => setShowDebris(e.target.checked)}
-          />
-          Show debris (façade buffer, experimental)
-        </label>
-
         <p style={{ fontSize: "0.75rem", color: "#999" }}>
           Dashed purple lines are QAFI faults — click one to run its
           maximum-magnitude earthquake. In Manual mode, click anywhere else
@@ -205,13 +191,13 @@ export default function App() {
       <main style={{ flex: 1 }}>
         <DamageMap
           results={result?.buildings ?? null}
+          municipalityStats={result?.municipality_stats ?? []}
           evaluatedRegion={result?.evaluated_region ?? null}
           faults={faults}
           selectedFaultId={selectedFaultId}
           onFaultClick={handleFaultClick}
           onMapClick={handleMapClick}
           onMapMove={(lat, lon) => setMapCenter({ lat, lon })}
-          showDebris={showDebris}
         />
       </main>
     </div>

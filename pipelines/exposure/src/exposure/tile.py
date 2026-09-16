@@ -61,6 +61,22 @@ def tile_debris(debris: gpd.GeoDataFrame, output_path: str | Path) -> Path:
         return tile_geojson_files([geojson_path], output_path, layer_name="debris")
 
 
+def tile_municipalities(municipalities: gpd.GeoDataFrame, output_path: str | Path) -> Path:
+    """Tile municipal boundary polygons (municipalities.py) into
+    `municipalities.pmtiles`, the low-zoom choropleth layer -- same
+    tippecanoe path as `tile_buildings`/`tile_debris`, own function since
+    the required columns differ (`ine_code`/`name`/`n_buildings`, not
+    `building_id`).
+    """
+    if "ine_code" not in municipalities.columns:
+        raise ValueError("municipalities GeoDataFrame must have an ine_code column")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        geojson_path = Path(tmp) / "municipalities.geojson"
+        municipalities.to_file(geojson_path, driver="GeoJSON")
+        return tile_geojson_files([geojson_path], output_path, layer_name="municipalities")
+
+
 def tile_geojson_files(
     geojson_paths: list[Path], output_path: str | Path, layer_name: str = "buildings"
 ) -> Path:

@@ -1,4 +1,4 @@
-import { DAMAGE_COLORS, DAMAGE_STATES } from "../damageColors";
+import { DAMAGE_COLORS, DAMAGE_STATES, DEBRIS_COLOR } from "../damageColors";
 
 function LegendRow({ color, label }: { color: string; label: string }) {
   return (
@@ -27,6 +27,10 @@ export function DamageLegend() {
           this building at all (outside the affected radius), not that it
           came out undamaged -- see DamageMap.tsx. */}
       <LegendRow color={DAMAGE_COLORS.Unknown} label="Not evaluated" />
+      {/* Debris rings (ADR-0010) are always shown after a scenario run --
+          see DamageMap.tsx -- a separate concept from a building's own
+          damage color, not a restatement of it. */}
+      <LegendRow color={DEBRIS_COLOR} label="Debris (façade buffer)" />
     </div>
   );
 }
