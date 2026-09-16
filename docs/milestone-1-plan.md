@@ -25,9 +25,15 @@ These were confirmed with the project owner before planning the architecture:
   2018-tool façade-buffer heuristic (§4.8 of `merisur.md`) as the MVP
   formula, pending UPM access to the 2023 debris-model paper
   (`docs/questions-for-upm.md` §3).
-- **One damage calculation only** — skip MERISUR's three probability levels
-  (median / median+1σ / median+1σ+P85) for now; add them once the base chain
-  works. Compute the median-ground-motion, modal-damage case only.
+- ~~**One damage calculation only** — skip MERISUR's three probability
+  levels (median / median+1σ / median+1σ+P85) for now; add them once the
+  base chain works. Compute the median-ground-motion, modal-damage case
+  only.~~ — superseded:
+  [ADR-0011](./decisions/0011-probability-level-selector.md) implements
+  all three tiers end-to-end (backend + frontend selector), picked back up
+  once `docs/validation-lorca-2011.md` §10.5 found the "base chain works"
+  bar had already been cleared and the median+1σ tier closed a real,
+  concretely quantified gap.
 
 ## 2. Deliberate deviations from MERISUR's method
 
@@ -237,12 +243,13 @@ map code next:
 
 ## 8. Explicitly out of scope for milestone 1
 
-- Probability-level selector (median+1σ, P85 damage).
+- ~~Probability-level selector (median+1σ, P85 damage).~~ — superseded:
+  see [ADR-0011](./decisions/0011-probability-level-selector.md).
 - ~~Any area beyond Lorca municipality~~ — superseded: milestone 2's
   region-by-region expansion started with Murcia + Andalucía, see
   [ADR-0005](./decisions/0005-region-scale-crawling.md). The rest of this
-  list still holds — expanding coverage didn't pull debris, the probability
-  selector, or site amplification back into scope.
+  list still holds — expanding coverage didn't pull debris or site
+  amplification back into scope.
 - Site amplification beyond (at most) a trivial Vs30-derived factor.
 - Scenario save/share, auth, multi-user features.
 - Any engine other than Akkar et al. 2014 — the "pluggable engine" goal

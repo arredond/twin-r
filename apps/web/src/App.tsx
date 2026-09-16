@@ -1,18 +1,21 @@
 import { useEffect, useState } from "react";
 import { DamageMap } from "./components/DamageMap";
 import { RuptureForm, type ManualParams } from "./components/RuptureForm";
+import { PROBABILITY_LEVEL_LABELS } from "./probabilityLevels";
 import { DamageLegend } from "./components/DamageLegend";
 import {
   listFaults,
   runFaultScenario,
   runManualScenario,
   type Fault,
+  type ProbabilityLevel,
   type ScenarioResult,
 } from "./scenarioApi";
 
 // twin-r milestone-1 MVP shell: source panel -> run -> damage layer,
 // matching MERISUR's own UX shape (docs/merisur.md §5). The
-// probability-level selector is still deferred (docs/milestone-1-plan.md §8).
+// probability-level selector (docs/merisur.md §4.7) landed per
+// docs/validation-lorca-2011.md §10.5.
 export default function App() {
   const [result, setResult] = useState<ScenarioResult | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -39,6 +42,11 @@ export default function App() {
   // to manual mode and fills in the clicked coordinates, matching "clicking
   // on the map should set lat/long."
   const [mode, setMode] = useState<"automatic" | "manual">("automatic");
+  // MERISUR's probability-level selector (docs/merisur.md §4.7): shared
+  // across both modes, same as `mode` itself -- lifted here rather than
+  // duplicated per-mode since it means the same thing (which ground-motion/
+  // damage percentile to use) regardless of how the rupture was defined.
+  const [probabilityLevel, setProbabilityLevel] = useState<ProbabilityLevel>("high");
   // Debris layer (ADR-0010): off by default, matching MERISUR's own
   // separate "Load debris on map" action (docs/merisur.md §5) -- a static
   // PMTiles layer, so toggling it is free, but it's visually busy stacked
@@ -86,6 +94,7 @@ export default function App() {
         // tier -- omitting them (not just leaving them at a default value)
         // is what tells the backend to stay a point source.
         ...(advancedEnabled ? { strike, dip, ztor_km: ztorKm } : {}),
+        probability_level: probabilityLevel,
       })
     );
   }
@@ -95,7 +104,9 @@ export default function App() {
   // centered.
   function handleFaultSubmit(faultId: string) {
     setSelectedFaultId(faultId);
-    return runScenario(() => runFaultScenario(faultId, mapCenter.lat, mapCenter.lon));
+    return runScenario(() =>
+      runFaultScenario(faultId, mapCenter.lat, mapCenter.lon, probabilityLevel)
+    );
   }
 
   // Clicking a fault on the map selects *and* runs it immediately, matching
@@ -106,7 +117,7 @@ export default function App() {
   // trace it occurs.
   function handleFaultClick(faultId: string, lat: number, lon: number) {
     setSelectedFaultId(faultId);
-    void runScenario(() => runFaultScenario(faultId, lat, lon));
+    void runScenario(() => runFaultScenario(faultId, lat, lon, probabilityLevel));
   }
 
   // Clicking anywhere else on the map (DamageMap already excludes fault-line
@@ -143,6 +154,8 @@ export default function App() {
         <RuptureForm
           mode={mode}
           onModeChange={setMode}
+          probabilityLevel={probabilityLevel}
+          onProbabilityLevelChange={setProbabilityLevel}
           faults={faults}
           faultsError={faultsError}
           selectedFaultId={selectedFaultId}
@@ -163,7 +176,9 @@ export default function App() {
             {result.rupture.mag.toFixed(2)}
             {result.rupture.finite_rupture && " (finite rupture plane)"}
             <br />
-            <span style={{ color: "#666" }}>{result.rupture.source}</span>
+            <span style={{ color: "#666" }}>
+              {result.rupture.source} — {PROBABILITY_LEVEL_LABELS[result.rupture.probability_level]}
+            </span>
           </p>
         )}
 

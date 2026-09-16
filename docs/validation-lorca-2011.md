@@ -387,15 +387,22 @@ damage, not a census, still applies — these numbers are not directly
 comparable), but it's the cheapest, most-grounded of the three levers: no
 vendoring, no taxonomy judgment calls, no blocked-on-UPM data dependency.
 
-**Added recommendation, ranked alongside §10.4:**
+**Added recommendation, ranked alongside §10.4 — done:**
 
-6. **Implement the probability-level selector** (median / median+1σ ground
-   motion, modal / 85th-percentile damage — `merisur.md` §4.7): thread a
-   `sigma_multiplier` (0.0 / 1.0) through `ground_motion.py`'s existing
-   `sig` output into `compute_sa03`/`compute_sa03_gridded`, expose it as a
-   scenario parameter (CLI flag + API field + frontend selector), default to
-   today's median-only behaviour so nothing changes unless a caller asks.
-   Independent of, and complementary to, recommendations 1–2 — land in
-   either order, but land this one too. Re-run this validation at all three
-   tiers once (1), (2), and this are in, and report the full 3×3 (taxonomy ×
-   IM-fix × probability-tier) grid rather than a single number.
+6. ~~**Implement the probability-level selector** (median / median+1σ
+   ground motion, modal / 85th-percentile damage — `merisur.md` §4.7):
+   thread a `sigma_multiplier` (0.0 / 1.0) through `ground_motion.py`'s
+   existing `sig` output into `compute_sa03`/`compute_sa03_gridded`,
+   expose it as a scenario parameter (CLI flag + API field + frontend
+   selector), default to today's median-only behaviour so nothing changes
+   unless a caller asks.~~ Implemented in
+   [ADR-0011](./decisions/0011-probability-level-selector.md): CLI
+   (`--tier`), both API routes (`probability_level`), and a frontend
+   selector are all in, still defaulting to "high" (today's original
+   behaviour) when unspecified. Re-running this scenario end-to-end (not
+   just the scratch experiment above) at Lorca scale: "high" 0
+   damaged-modal buildings (unchanged), "low" 2,569, "very_low" 12,204 —
+   see ADR-0011's Consequences for the exact breakdown. Recommendations 1–2
+   (taxonomy + IM-type fix) remain open — independent of, and complementary
+   to, this one; the full 3×3 (taxonomy × IM-fix × probability-tier) grid
+   this item originally asked for still needs 1–2 landed first.

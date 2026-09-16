@@ -22,6 +22,7 @@ from .building_lookup import get_building
 from .engine import run_scenario
 from .faults import get_fault, load_nearby_faults
 from .ground_motion import estimate_significant_distance_km
+from .probability_level import ProbabilityLevel, resolve_probability_level
 from .response import prepare_response_buildings
 from .rupture import Rupture, from_fault, from_manual_input
 
@@ -69,9 +70,18 @@ class ManualRuptureRequest(BaseModel):
     strike: float | None = None
     dip: float | None = None
     ztor_km: float | None = None
+    # MERISUR's probability-level selector (probability_level.py,
+    # docs/merisur.md §4.7) -- defaults to "high" (median ground motion,
+    # modal damage state), today's only pre-existing behaviour.
+    probability_level: ProbabilityLevel = "high"
 
 
-def _run_and_serialize(rupture: Rupture) -> dict:
+def _run_and_serialize(rupture: Rupture, probability_level: str) -> dict:
+    try:
+        level_params = resolve_probability_level(probability_level)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
     try:
         t0 = time.monotonic()
         # Computed here (not left to run_scenario's own default) so the
@@ -80,10 +90,19 @@ def _run_and_serialize(rupture: Rupture) -> dict:
         # that's what lets the frontend tell "never evaluated" (outside
         # this radius) apart from "evaluated, confidently undamaged"
         # (inside it, but not in `buildings` below) without a per-building
-        # entry for either.
-        radius_km = estimate_significant_distance_km(rupture)
+        # entry for either. Uses this same request's sigma_multiplier
+        # (see estimate_significant_distance_km's docstring).
+        radius_km = estimate_significant_distance_km(
+            rupture, sigma_multiplier=level_params.sigma_multiplier
+        )
         result = run_scenario(
-            rupture, BUILDINGS_PATH, EXPOSURE_PATH, FRAGILITY_PATH, max_distance_km=radius_km
+            rupture,
+            BUILDINGS_PATH,
+            EXPOSURE_PATH,
+            FRAGILITY_PATH,
+            max_distance_km=radius_km,
+            sigma_multiplier=level_params.sigma_multiplier,
+            damage_percentile=level_params.damage_percentile,
         )
         n_evaluated = len(result)
         # Filters to damaged/uncertain buildings and trims to the thin
@@ -109,6 +128,11 @@ def _run_and_serialize(rupture: Rupture) -> dict:
             # vs. the point-source fallback -- surfaces the distinction
             # rather than hiding which approximation produced this result.
             "finite_rupture": rupture.surface is not None,
+            # Echoes back which of the three tiers actually ran (see
+            # ManualRuptureRequest/run_fault_scenario's own parameter) --
+            # a caller that didn't specify one still sees "high" rather
+            # than needing to remember the default.
+            "probability_level": probability_level,
         },
         # The circle the frontend colors green-by-default within (any
         # building not individually listed below) -- an approximation of
@@ -138,7 +162,7 @@ def run_manual_scenario(req: ManualRuptureRequest) -> dict:
         dip=req.dip,
         ztor_km=req.ztor_km,
     )
-    return _run_and_serialize(rupture)
+    return _run_and_serialize(rupture, req.probability_level)
 
 
 @app.get("/faults")
@@ -159,17 +183,20 @@ def list_faults(
 
 @app.get("/scenarios/fault")
 def run_fault_scenario(
-    fault_id: str, near_lat: float = DEFAULT_LAT, near_lon: float = DEFAULT_LON
+    fault_id: str,
+    near_lat: float = DEFAULT_LAT,
+    near_lon: float = DEFAULT_LON,
+    probability_level: ProbabilityLevel = "high",
 ) -> dict:
     """Automatic mode (docs/merisur.md §4.1): a QAFI fault's own
     maximum-magnitude earthquake. A GET, not a POST -- unlike manual mode,
     every parameter that actually changes the returned `buildings` is
-    already fixed by `fault_id` alone (mmax/geometry/dip/rake all come
-    from QAFI, see rupture.py's `from_fault`); `near_lat`/`near_lon` only
-    pick which point on the trace gets echoed back as `rupture`'s
-    location and `evaluated_region`'s display circle center. That makes
-    this cacheable and testable as a plain URL, the same as `/faults`
-    below.
+    already fixed by `fault_id` and `probability_level` alone (mmax/
+    geometry/dip/rake all come from QAFI, see rupture.py's `from_fault`);
+    `near_lat`/`near_lon` only pick which point on the trace gets echoed
+    back as `rupture`'s location and `evaluated_region`'s display circle
+    center. That makes this cacheable and testable as a plain URL, the
+    same as `/faults` below.
     """
     try:
         fault = get_fault(FAULTS_PATH, fault_id, near_lat, near_lon)
@@ -190,7 +217,7 @@ def run_fault_scenario(
         min_depth_km=fault["min_depth_km"],
         max_depth_km=fault["max_depth_km"],
     )
-    return _run_and_serialize(rupture)
+    return _run_and_serialize(rupture, probability_level)
 
 
 @app.get("/buildings/{building_id}")

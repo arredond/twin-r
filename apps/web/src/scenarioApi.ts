@@ -3,6 +3,13 @@
 // VITE_SCENARIO_API_URL for a deployed Lambda Function URL.
 const API_URL = import.meta.env.VITE_SCENARIO_API_URL ?? "http://localhost:8000";
 
+// MERISUR's three selectable scenario probability levels
+// (services/scenario/probability_level.py, docs/merisur.md §4.7): "high"
+// (median ground motion, modal damage state) / "low" (median+1sigma ground
+// motion, still modal damage state) / "very_low" (median+1sigma ground
+// motion, 85th-percentile damage state).
+export type ProbabilityLevel = "high" | "low" | "very_low";
+
 export interface ManualRuptureRequest {
   lat: number;
   lon: number;
@@ -13,6 +20,7 @@ export interface ManualRuptureRequest {
   strike?: number;
   dip?: number;
   ztor_km?: number;
+  probability_level?: ProbabilityLevel;
 }
 
 export interface Fault {
@@ -56,7 +64,14 @@ export interface EvaluatedRegion {
 }
 
 export interface ScenarioResult {
-  rupture: { lat: number; lon: number; mag: number; source: string; finite_rupture: boolean };
+  rupture: {
+    lat: number;
+    lon: number;
+    mag: number;
+    source: string;
+    finite_rupture: boolean;
+    probability_level: ProbabilityLevel;
+  };
   evaluated_region: EvaluatedRegion;
   // Only buildings that are actually damaged, or "None"-modal but still a
   // genuine close call against the runner-up damage state (margin under
@@ -113,12 +128,14 @@ export function runManualScenario(req: ManualRuptureRequest): Promise<ScenarioRe
 export function runFaultScenario(
   faultId: string,
   nearLat: number,
-  nearLon: number
+  nearLon: number,
+  probabilityLevel: ProbabilityLevel = "high"
 ): Promise<ScenarioResult> {
   return getScenario("/scenarios/fault", {
     fault_id: faultId,
     near_lat: nearLat,
     near_lon: nearLon,
+    probability_level: probabilityLevel,
   });
 }
 

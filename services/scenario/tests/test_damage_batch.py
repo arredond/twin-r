@@ -44,6 +44,28 @@ def test_batch_matches_scalar_path_exactly(fragility_table: FragilityTable):
             assert batch[col].iloc[i] == pytest.approx(prob, abs=1e-9)
 
 
+def test_batch_matches_scalar_path_with_percentile(fragility_table: FragilityTable):
+    rng = np.random.default_rng(2)
+    n = 200
+    taxonomy_classes = rng.choice(["CR_LDUAL-DUL", "MR_LWAL-DUL"], size=n)
+    height_classes = rng.integers(1, 8, size=n)
+    im_values = rng.uniform(0.01, 1.0, size=n)
+
+    batch = evaluate_damage_batch(
+        fragility_table, taxonomy_classes, height_classes, im_values, damage_percentile=0.85
+    )
+
+    for i in range(n):
+        expected_state, _ = evaluate_building_damage(
+            fragility_table,
+            taxonomy_classes[i],
+            int(height_classes[i]),
+            im_values[i],
+            damage_percentile=0.85,
+        )
+        assert batch["damage_state"].iloc[i] == expected_state
+
+
 def test_batch_probabilities_sum_to_one(fragility_table: FragilityTable):
     rng = np.random.default_rng(1)
     n = 100

@@ -228,6 +228,83 @@ def test_manual_scenario_omits_none_modal_buildings_that_are_not_a_close_call(cl
     assert body["buildings"] == []
 
 
+def test_manual_scenario_defaults_to_high_probability_level(client):
+    resp = client.post(
+        "/scenarios/manual", json={"lat": NEAR_LAT, "lon": NEAR_LON, "mag": 6.5, "rake": 20.0}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["rupture"]["probability_level"] == "high"
+
+
+def test_manual_scenario_accepts_low_and_very_low_probability_levels(client):
+    for level in ["low", "very_low"]:
+        resp = client.post(
+            "/scenarios/manual",
+            json={
+                "lat": NEAR_LAT,
+                "lon": NEAR_LON,
+                "mag": 6.5,
+                "rake": 20.0,
+                "probability_level": level,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["rupture"]["probability_level"] == level
+
+
+def test_manual_scenario_rejects_unknown_probability_level(client):
+    resp = client.post(
+        "/scenarios/manual",
+        json={
+            "lat": NEAR_LAT,
+            "lon": NEAR_LON,
+            "mag": 6.5,
+            "probability_level": "medium",
+        },
+    )
+    # FastAPI/Pydantic rejects a value outside the Literal at the request-
+    # validation layer, before this route's own body ever runs.
+    assert resp.status_code == 422
+
+
+def test_low_probability_level_shows_more_damage_than_high_at_the_same_magnitude(client):
+    # Mw5.5 at "high" (median ground motion) is confidently-undamaged at
+    # b1/b2 and ships no buildings (see
+    # test_manual_scenario_omits_none_modal_buildings_that_are_not_a_close_call
+    # below) -- median+1sigma ("low") must push at least one of them into
+    # the shipped response, the actual behavioural effect this parameter
+    # exists for, not just a plumbing/echo check.
+    high = client.post(
+        "/scenarios/manual", json={"lat": NEAR_LAT, "lon": NEAR_LON, "mag": 5.5, "rake": 0.0}
+    ).json()
+    low = client.post(
+        "/scenarios/manual",
+        json={
+            "lat": NEAR_LAT,
+            "lon": NEAR_LON,
+            "mag": 5.5,
+            "rake": 0.0,
+            "probability_level": "low",
+        },
+    ).json()
+    assert high["buildings"] == []
+    assert len(low["buildings"]) > 0
+
+
+def test_fault_scenario_accepts_probability_level(client):
+    resp = client.get(
+        "/scenarios/fault",
+        params={
+            "fault_id": "TEST001",
+            "near_lat": NEAR_LAT,
+            "near_lon": NEAR_LON,
+            "probability_level": "low",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["rupture"]["probability_level"] == "low"
+
+
 def test_manual_scenario_without_geometry_is_a_point_source(client):
     resp = client.post("/scenarios/manual", json={"lat": NEAR_LAT, "lon": NEAR_LON, "mag": 6.5})
     assert resp.status_code == 200

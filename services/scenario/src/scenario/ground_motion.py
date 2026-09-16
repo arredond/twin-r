@@ -50,13 +50,22 @@ _GMPE = AkkarEtAlRjb2014()
 _DISTANCE_CHUNK_SIZE = 200_000
 
 
-def _sa03_at_distances(rupture: Rupture, rjb_km: np.ndarray, vs30: float) -> np.ndarray:
-    """Median SA(0.3s), in g, at each given Rjb distance (km) for this rupture.
+def _sa03_at_distances(
+    rupture: Rupture, rjb_km: np.ndarray, vs30: float, sigma_multiplier: float = 0.0
+) -> np.ndarray:
+    """SA(0.3s), in g, at each given Rjb distance (km) for this rupture.
 
-    Distance-only entry point (no site lat/lon) -- shared by `compute_sa03`
-    (real sites) and `estimate_significant_distance_km` (searching for the
-    distance at which SA crosses a threshold, direction-independent since
-    Rjb is the only distance metric this GMPE uses).
+    `sigma_multiplier` shifts the result in log space by that many standard
+    deviations of the GMPE's own total aleatory uncertainty (`sig`, already
+    computed by every call here and previously discarded) -- 0.0 (default)
+    is the median, matching every caller before this parameter existed;
+    1.0 is MERISUR's "low probability / high impact" and "very low
+    probability / very high impact" tiers (`probability_level.py`,
+    `docs/merisur.md` §4.7). Distance-only entry point (no site lat/lon) --
+    shared by `compute_sa03` (real sites) and
+    `estimate_significant_distance_km` (searching for the distance at which
+    SA crosses a threshold, direction-independent since Rjb is the only
+    distance metric this GMPE uses).
     """
     n = len(rjb_km)
     if n == 0:
@@ -77,20 +86,24 @@ def _sa03_at_distances(rupture: Rupture, rjb_km: np.ndarray, vs30: float) -> np.
     phi = np.zeros((1, n))
     _GMPE.compute(ctx, imts, mean, sig, tau, phi)
 
-    return np.exp(mean[0])  # ln(SA) -> SA, in g
+    return np.exp(mean[0] + sigma_multiplier * sig[0])  # ln(SA) -> SA, in g
 
 
 def compute_sa03(
-    rupture: Rupture, lats: np.ndarray, lons: np.ndarray, vs30: float = DEFAULT_VS30
+    rupture: Rupture,
+    lats: np.ndarray,
+    lons: np.ndarray,
+    vs30: float = DEFAULT_VS30,
+    sigma_multiplier: float = 0.0,
 ) -> np.ndarray:
-    """Return median SA(0.3s), in g, at each (lat, lon) site for this rupture.
+    """Return SA(0.3s), in g, at each (lat, lon) site for this rupture.
 
     Rjb comes from `rupture.surface` when present (ADR-0007: a real finite
     rupture plane, geometrically correct) -- falls back to the geodesic
     distance to `rupture`'s point location (rupture.py's point-source
     simplification) when it's not, which is always the case for manual-mode
     ruptures and rare for automatic-mode ones (only if hazardlib rejected
-    that fault's geometry).
+    that fault's geometry). `sigma_multiplier`: see `_sa03_at_distances`.
     """
     n = len(lats)
     if n == 0:
@@ -105,7 +118,7 @@ def compute_sa03(
     else:
         _, _, distance_m = _GEOD.inv(np.full(n, rupture.lon), np.full(n, rupture.lat), lons, lats)
         rjb_km = np.abs(distance_m) / 1000.0
-    return _sa03_at_distances(rupture, rjb_km, vs30)
+    return _sa03_at_distances(rupture, rjb_km, vs30, sigma_multiplier)
 
 
 # SA(0.3s) is smooth in distance and barely changes across a span this
@@ -129,6 +142,7 @@ def compute_sa03_gridded(
     lons: np.ndarray,
     vs30: float = DEFAULT_VS30,
     cell_km: float = SA_GRID_CELL_KM,
+    sigma_multiplier: float = 0.0,
 ) -> np.ndarray:
     """Like `compute_sa03`, but evaluated once per occupied grid cell and
     broadcast back to every site in it, not once per site.
@@ -136,6 +150,7 @@ def compute_sa03_gridded(
     Each building keeps its own row in the caller's result (this only
     dedupes the expensive intermediate calculation) -- taxonomy/height-
     specific fragility lookups downstream still run per building as usual.
+    `sigma_multiplier`: see `_sa03_at_distances`.
     """
     n = len(lats)
     if n == 0:
@@ -161,7 +176,7 @@ def compute_sa03_gridded(
     cell_lats = (cell_row[first_index] + 0.5) * deg_lat
     cell_lons = (cell_col[first_index] + 0.5) * deg_lon
 
-    cell_sa = compute_sa03(rupture, cell_lats, cell_lons, vs30)
+    cell_sa = compute_sa03(rupture, cell_lats, cell_lons, vs30, sigma_multiplier)
     return cell_sa[inverse]
 
 
@@ -171,6 +186,7 @@ def estimate_significant_distance_km(
     min_km: float = 10.0,
     max_km: float = 300.0,
     vs30: float = DEFAULT_VS30,
+    sigma_multiplier: float = 0.0,
 ) -> float:
     """Distance beyond which this rupture's ground motion is negligible.
 
@@ -184,6 +200,13 @@ def estimate_significant_distance_km(
     see docs/validation-region-expansion.md §4 for why a flat 300km scanned
     far more of the region than most scenarios ever needed.
 
+    `sigma_multiplier` (see `_sa03_at_distances`) must match whatever value
+    the scenario itself will use (`engine.run_scenario`'s own parameter of
+    the same name) -- a higher-probability-level scenario's ground motion
+    stays above `min_significant_sa` out to a larger radius, so searching
+    at the wrong sigma would silently exclude buildings a "low"/"very_low"
+    tier run should have evaluated.
+
     SA(0.3s) decreases monotonically with Rjb for a fixed magnitude/rake,
     so binary search is safe and cheap (a handful of GMPE evaluations, not
     a per-site cost). Clamped to [min_km, max_km]: min_km avoids a
@@ -191,17 +214,17 @@ def estimate_significant_distance_km(
     margin around the rupture), max_km is a hard safety ceiling we've
     actually load-tested (docs/validation-region-expansion.md).
     """
-    sa_at_min = _sa03_at_distances(rupture, np.array([min_km]), vs30)[0]
+    sa_at_min = _sa03_at_distances(rupture, np.array([min_km]), vs30, sigma_multiplier)[0]
     if sa_at_min < min_significant_sa:
         return min_km
-    sa_at_max = _sa03_at_distances(rupture, np.array([max_km]), vs30)[0]
+    sa_at_max = _sa03_at_distances(rupture, np.array([max_km]), vs30, sigma_multiplier)[0]
     if sa_at_max >= min_significant_sa:
         return max_km
 
     lo, hi = min_km, max_km
     for _ in range(20):  # ~20 iterations narrows [10, 300] to sub-metre precision
         mid = (lo + hi) / 2
-        sa_mid = _sa03_at_distances(rupture, np.array([mid]), vs30)[0]
+        sa_mid = _sa03_at_distances(rupture, np.array([mid]), vs30, sigma_multiplier)[0]
         if sa_mid >= min_significant_sa:
             lo = mid
         else:

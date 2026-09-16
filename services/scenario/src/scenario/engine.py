@@ -129,6 +129,8 @@ def run_scenario(
     exposure_path: str,
     fragility_path: str,
     max_distance_km: float | None = None,
+    sigma_multiplier: float = 0.0,
+    damage_percentile: float | None = None,
 ) -> pd.DataFrame:
     """Run the full scenario chain and return the thin per-building result.
 
@@ -143,6 +145,16 @@ def run_scenario(
     buildings it can't possibly affect. Pass an explicit value to override
     (e.g. tests pinning a known radius).
 
+    `sigma_multiplier`/`damage_percentile`: MERISUR's probability-level
+    selector (`probability_level.py`, `docs/merisur.md` §4.7) -- callers
+    resolve a `ProbabilityLevel` ("high"/"low"/"very_low") to these two via
+    `resolve_probability_level` and pass the result straight through. Both
+    default to today's only behaviour (median ground motion, modal damage
+    state) so an existing caller that doesn't pass them is unaffected. When
+    `max_distance_km` is left as `None`, the derived radius uses the same
+    `sigma_multiplier` -- see `estimate_significant_distance_km`'s own
+    docstring for why that consistency matters.
+
     Columns: building_id, lon, lat, sa03_g, damage_state, prob_none,
     prob_slight, prob_moderate, prob_extensive, prob_complete. `lon`/`lat`
     (the same precomputed centroid columns `_load_sites` already reads) ride
@@ -151,7 +163,9 @@ def run_scenario(
     still place the ones it keeps on a map without a second lookup.
     """
     if max_distance_km is None:
-        max_distance_km = estimate_significant_distance_km(rupture)
+        max_distance_km = estimate_significant_distance_km(
+            rupture, sigma_multiplier=sigma_multiplier
+        )
 
     con = duckdb.connect()
     sites = _load_sites(con, buildings_path, exposure_path, rupture, max_distance_km)
@@ -159,7 +173,7 @@ def run_scenario(
         return pd.DataFrame(columns=_RESULT_COLUMNS)
 
     sites["sa03_g"] = compute_sa03_gridded(
-        rupture, sites["lat"].to_numpy(), sites["lon"].to_numpy()
+        rupture, sites["lat"].to_numpy(), sites["lon"].to_numpy(), sigma_multiplier=sigma_multiplier
     )
 
     fragility_table = FragilityTable.from_parquet(fragility_path)
@@ -168,6 +182,7 @@ def run_scenario(
         sites["taxonomy_class"].to_numpy(),
         sites["height_class"].to_numpy(),
         sites["sa03_g"].to_numpy(),
+        damage_percentile=damage_percentile,
     )
 
     result = pd.concat(

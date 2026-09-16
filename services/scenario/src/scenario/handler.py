@@ -21,6 +21,7 @@ import os
 from .engine import run_scenario
 from .faults import get_fault
 from .ground_motion import estimate_significant_distance_km
+from .probability_level import resolve_probability_level
 from .response import prepare_response_buildings
 from .rupture import Rupture, from_fault, from_manual_input
 
@@ -40,12 +41,27 @@ def handler(event: dict, context) -> dict:
     body = json.loads(event.get("body") or "{}")
     try:
         rupture = _build_rupture(query, body)
+        # fault mode (automatic) passes this as a query param, matching
+        # fault_id/near_lat/near_lon above; manual mode as a body field --
+        # same GET-vs-POST split _build_rupture already documents.
+        probability_level = (
+            query.get("probability_level") or body.get("probability_level") or "high"
+        )
+        level_params = resolve_probability_level(probability_level)
     except (KeyError, ValueError) as e:
         return _response(400, {"error": f"invalid rupture parameters: {e}"})
 
-    radius_km = estimate_significant_distance_km(rupture)
+    radius_km = estimate_significant_distance_km(
+        rupture, sigma_multiplier=level_params.sigma_multiplier
+    )
     result = run_scenario(
-        rupture, BUILDINGS_PATH, EXPOSURE_PATH, FRAGILITY_PATH, max_distance_km=radius_km
+        rupture,
+        BUILDINGS_PATH,
+        EXPOSURE_PATH,
+        FRAGILITY_PATH,
+        max_distance_km=radius_km,
+        sigma_multiplier=level_params.sigma_multiplier,
+        damage_percentile=level_params.damage_percentile,
     )
     n_evaluated = len(result)
     result = prepare_response_buildings(result)
@@ -56,6 +72,7 @@ def handler(event: dict, context) -> dict:
             "mag": rupture.mag,
             "source": rupture.source,
             "finite_rupture": rupture.surface is not None,
+            "probability_level": probability_level,
         },
         "evaluated_region": {"lat": rupture.lat, "lon": rupture.lon, "radius_km": radius_km},
         "buildings": result.to_dict(orient="records"),

@@ -1,4 +1,5 @@
-import type { Fault } from "../scenarioApi";
+import type { Fault, ProbabilityLevel } from "../scenarioApi";
+import { PROBABILITY_LEVEL_LABELS } from "../probabilityLevels";
 
 // MERISUR's two rupture-entry modes (docs/merisur.md §4.1/§5): "Automatic"
 // (pick a QAFI fault, get its maximum-magnitude earthquake) and "Manual"
@@ -21,6 +22,8 @@ export interface ManualParams {
 interface Props {
   mode: "automatic" | "manual";
   onModeChange: (mode: "automatic" | "manual") => void;
+  probabilityLevel: ProbabilityLevel;
+  onProbabilityLevelChange: (level: ProbabilityLevel) => void;
   faults: Fault[] | null;
   faultsError: string | null;
   selectedFaultId: string | null;
@@ -35,6 +38,8 @@ interface Props {
 export function RuptureForm({
   mode,
   onModeChange,
+  probabilityLevel,
+  onProbabilityLevelChange,
   faults,
   faultsError,
   selectedFaultId,
@@ -63,6 +68,22 @@ export function RuptureForm({
           Manual
         </button>
       </div>
+
+      <fieldset style={{ border: "1px solid #ddd", borderRadius: 4 }}>
+        <legend style={{ fontSize: "0.85rem" }}>Probability level</legend>
+        {(Object.keys(PROBABILITY_LEVEL_LABELS) as ProbabilityLevel[]).map((level) => (
+          <label key={level} style={{ flexDirection: "row", alignItems: "center", gap: "0.4rem" }}>
+            <input
+              type="radio"
+              name="probabilityLevel"
+              checked={probabilityLevel === level}
+              onChange={() => onProbabilityLevelChange(level)}
+            />
+            {PROBABILITY_LEVEL_LABELS[level]}
+          </label>
+        ))}
+      </fieldset>
+
       {mode === "automatic" ? (
         <AutomaticForm
           faults={faults}

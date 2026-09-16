@@ -47,17 +47,48 @@ def modal_damage_state(probabilities: dict[str, float]) -> str:
     return max(probabilities, key=lambda state: probabilities[state])
 
 
+def percentile_damage_state(probabilities: dict[str, float], percentile: float) -> str:
+    """The smallest damage state whose cumulative probability (summed from
+    "None" upward, in ascending severity) reaches `percentile` -- MERISUR's
+    "very low probability / very high impact" tier reports the 85th
+    percentile this way (`docs/merisur.md` §4.7), rather than the modal
+    (most-likely) state `modal_damage_state` returns. At `percentile=0.85`
+    this picks a state such that at most 15% of the probability mass is
+    *more* severe than it -- a deliberately pessimistic read of the same
+    distribution `modal_damage_state` reads optimistically.
+    """
+    cumulative = 0.0
+    for state in DAMAGE_STATES:
+        cumulative += probabilities[state]
+        if cumulative >= percentile:
+            return state
+    return DAMAGE_STATES[-1]  # unreachable once probabilities sum to 1.0, kept as a safe fallback
+
+
+def select_damage_state(probabilities: dict[str, float], damage_percentile: float | None) -> str:
+    """`damage_percentile=None` (default, matching every caller before this
+    parameter existed) selects the modal state; a float in (0, 1] selects
+    `percentile_damage_state` instead -- see `probability_level.py`."""
+    if damage_percentile is None:
+        return modal_damage_state(probabilities)
+    return percentile_damage_state(probabilities, damage_percentile)
+
+
 def evaluate_building_damage(
     fragility_table: FragilityTable,
     taxonomy_class: str,
     height_class: int,
     im_value: float,
+    damage_percentile: float | None = None,
 ) -> tuple[str, dict[str, float]]:
-    """Return (modal_damage_state, full probability distribution) for one building."""
+    """Return (damage_state, full probability distribution) for one building.
+
+    `damage_percentile`: see `select_damage_state`.
+    """
     curve = fragility_table.get(taxonomy_class, height_class)
     exceedance = curve.exceedance_at(im_value)
     probabilities = damage_state_probabilities(exceedance)
-    return modal_damage_state(probabilities), probabilities
+    return select_damage_state(probabilities, damage_percentile), probabilities
 
 
 def evaluate_damage_batch(
@@ -65,6 +96,7 @@ def evaluate_damage_batch(
     taxonomy_classes: np.ndarray,
     height_classes: np.ndarray,
     im_values: np.ndarray,
+    damage_percentile: float | None = None,
 ) -> pd.DataFrame:
     """Vectorized equivalent of calling `evaluate_building_damage` once per
     building, grouped by (taxonomy_class, height_class).
@@ -75,6 +107,15 @@ def evaluate_damage_batch(
     between a scenario over a whole region (ADR-0005) taking seconds vs.
     tens of minutes. See test_damage.py for a cross-check against the
     scalar path on the same inputs.
+
+    `damage_percentile`: see `select_damage_state` -- `None` (default)
+    picks each building's modal state (argmax); a float in (0, 1] picks the
+    smallest state whose cumulative probability reaches it, vectorized as
+    "first row where the running cumulative sum crosses the threshold"
+    (`np.argmax` on a boolean array returns its first True, and the last
+    row's cumulative sum is always ~1.0 by construction, so one is always
+    found -- same guarantee `percentile_damage_state`'s scalar fallback
+    documents).
 
     Returns a DataFrame indexed like the inputs, columns: damage_state,
     prob_none, prob_slight, prob_moderate, prob_extensive, prob_complete.
@@ -120,8 +161,12 @@ def evaluate_damage_batch(
             group_probs[i] = np.where(is_degenerate, fallback, normal)
             prob_arrays[state][idx] = group_probs[i]
 
-        modal_i = np.argmax(group_probs, axis=0)
-        damage_states[idx] = np.array(DAMAGE_STATES)[modal_i]
+        if damage_percentile is None:
+            state_i = np.argmax(group_probs, axis=0)
+        else:
+            reaches_percentile = np.cumsum(group_probs, axis=0) >= damage_percentile
+            state_i = np.argmax(reaches_percentile, axis=0)
+        damage_states[idx] = np.array(DAMAGE_STATES)[state_i]
 
     return pd.DataFrame(
         {

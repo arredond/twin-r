@@ -66,6 +66,28 @@ def test_significant_distance_is_where_sa_crosses_threshold():
     assert sa_far < threshold
 
 
+def test_sigma_multiplier_increases_ground_motion():
+    # MERISUR's "low"/"very_low" tiers (docs/merisur.md §4.7): median+1sigma
+    # ground motion must be strictly larger than the median (sigma_multiplier
+    # defaults to 0.0, unchanged pre-existing behaviour).
+    rupture = Rupture(lat=37.67, lon=-1.70, mag=5.2, rake=44.0)
+    lats, lons = np.array([37.70]), np.array([-1.72])
+    median = compute_sa03(rupture, lats, lons)
+    plus_one_sigma = compute_sa03(rupture, lats, lons, sigma_multiplier=1.0)
+    assert plus_one_sigma[0] > median[0]
+
+
+def test_significant_distance_at_higher_sigma_is_not_smaller():
+    # A "low"/"very_low" tier scenario's spatial pre-filter must not shrink
+    # relative to "high" -- see estimate_significant_distance_km's own
+    # docstring on why this consistency matters (a too-small radius would
+    # silently exclude buildings the higher-impact tier should evaluate).
+    rupture = Rupture(lat=37.67, lon=-1.70, mag=5.2, rake=44.0)
+    median_radius = estimate_significant_distance_km(rupture, sigma_multiplier=0.0)
+    high_impact_radius = estimate_significant_distance_km(rupture, sigma_multiplier=1.0)
+    assert high_impact_radius >= median_radius
+
+
 def test_compute_sa03_uses_surface_rjb_when_present():
     # ADR-0007: a site sitting right on the fault trace should get Rjb≈0
     # (and therefore high SA) via the finite surface, even though it's not
