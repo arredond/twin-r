@@ -1,7 +1,12 @@
 import json
 
 import numpy as np
-from scenario.ground_motion import compute_sa03, estimate_significant_distance_km
+from openquake.hazardlib.imt import PGA, SA
+from scenario.ground_motion import (
+    compute_intensity,
+    compute_intensity_gridded,
+    estimate_significant_distance_km,
+)
 from scenario.rupture import Rupture, from_fault
 
 SIMPLE_TRACE_GEOJSON = json.dumps(
@@ -9,11 +14,19 @@ SIMPLE_TRACE_GEOJSON = json.dumps(
 )
 
 
+def _compute_sa03(rupture, lats, lons, **kwargs):
+    # Most of this file predates compute_intensity's `imt` parameter and
+    # only ever exercised the SA(0.3s) case -- this local wrapper keeps
+    # those tests reading the same way rather than repeating `SA(0.3)` at
+    # every call site.
+    return compute_intensity(rupture, lats, lons, SA(0.3), **kwargs)
+
+
 def test_sa_decreases_with_distance():
     rupture = Rupture(lat=37.67, lon=-1.70, mag=6.0, rake=0.0)
     lats = np.array([37.67, 37.67, 37.67])
     lons = np.array([-1.70, -1.80, -2.20])  # increasingly far east->west
-    sa = compute_sa03(rupture, lats, lons)
+    sa = _compute_sa03(rupture, lats, lons)
     assert sa[0] > sa[1] > sa[2]
     assert np.all(sa > 0)
 
@@ -21,14 +34,14 @@ def test_sa_decreases_with_distance():
 def test_sa_increases_with_magnitude():
     lats = np.array([37.70])
     lons = np.array([-1.80])
-    small = compute_sa03(Rupture(lat=37.67, lon=-1.70, mag=4.5, rake=0.0), lats, lons)
-    large = compute_sa03(Rupture(lat=37.67, lon=-1.70, mag=7.0, rake=0.0), lats, lons)
+    small = _compute_sa03(Rupture(lat=37.67, lon=-1.70, mag=4.5, rake=0.0), lats, lons)
+    large = _compute_sa03(Rupture(lat=37.67, lon=-1.70, mag=7.0, rake=0.0), lats, lons)
     assert large[0] > small[0]
 
 
 def test_empty_sites_returns_empty_array():
     rupture = Rupture(lat=37.67, lon=-1.70, mag=6.0, rake=0.0)
-    result = compute_sa03(rupture, np.array([]), np.array([]))
+    result = _compute_sa03(rupture, np.array([]), np.array([]))
     assert len(result) == 0
 
 
@@ -60,8 +73,8 @@ def test_significant_distance_is_where_sa_crosses_threshold():
     lat_near = 37.67 + (d - 2) / 111.0  # ~2km inside the boundary
     lat_far = 37.67 + (d + 2) / 111.0  # ~2km outside
 
-    sa_near = compute_sa03(rupture, np.array([lat_near]), np.array([-1.70]))[0]
-    sa_far = compute_sa03(rupture, np.array([lat_far]), np.array([-1.70]))[0]
+    sa_near = _compute_sa03(rupture, np.array([lat_near]), np.array([-1.70]))[0]
+    sa_far = _compute_sa03(rupture, np.array([lat_far]), np.array([-1.70]))[0]
     assert sa_near >= threshold
     assert sa_far < threshold
 
@@ -72,8 +85,8 @@ def test_sigma_multiplier_increases_ground_motion():
     # defaults to 0.0, unchanged pre-existing behaviour).
     rupture = Rupture(lat=37.67, lon=-1.70, mag=5.2, rake=44.0)
     lats, lons = np.array([37.70]), np.array([-1.72])
-    median = compute_sa03(rupture, lats, lons)
-    plus_one_sigma = compute_sa03(rupture, lats, lons, sigma_multiplier=1.0)
+    median = _compute_sa03(rupture, lats, lons)
+    plus_one_sigma = _compute_sa03(rupture, lats, lons, sigma_multiplier=1.0)
     assert plus_one_sigma[0] > median[0]
 
 
@@ -113,6 +126,32 @@ def test_compute_sa03_uses_surface_rjb_when_present():
     # A site along the trace, away from the anchor point -- the finite
     # surface should treat it as much closer than the point-source does.
     site_lat, site_lon = np.array([37.70]), np.array([-1.68])
-    sa_surface = compute_sa03(rupture_with_surface, site_lat, site_lon)[0]
-    sa_point = compute_sa03(rupture_point_source, site_lat, site_lon)[0]
+    sa_surface = _compute_sa03(rupture_with_surface, site_lat, site_lon)[0]
+    sa_point = _compute_sa03(rupture_point_source, site_lat, site_lon)[0]
     assert sa_surface > sa_point
+
+
+def test_compute_intensity_dispatches_to_the_requested_imt():
+    # PGA and SA(0.3s) are genuinely different curves for the same rupture
+    # -- this is the whole point of docs/validation-lorca-2011.md §10.2's
+    # fix: a caller must get back the IM it actually asked for, not always
+    # SA(0.3s) regardless of what was requested.
+    rupture = Rupture(lat=37.67, lon=-1.70, mag=5.2, rake=44.0)
+    lats, lons = np.array([37.70]), np.array([-1.72])
+    pga = compute_intensity(rupture, lats, lons, PGA())
+    sa03 = compute_intensity(rupture, lats, lons, SA(0.3))
+    assert pga[0] != sa03[0]
+
+
+def test_compute_intensity_gridded_matches_ungridded_for_pga():
+    # Cross-check compute_intensity_gridded against the exact per-site path
+    # for a non-SA(0.3s) IMT specifically -- the gridding logic itself
+    # doesn't care which IMT it's deduping, but this used to only ever be
+    # exercised with SA(0.3s) (compute_sa03_gridded), so PGA is worth
+    # checking explicitly now that it's a real code path.
+    rupture = Rupture(lat=37.67, lon=-1.70, mag=6.0, rake=0.0)
+    lats = np.array([37.70, 37.71, 37.72])
+    lons = np.array([-1.72, -1.71, -1.70])
+    exact = compute_intensity(rupture, lats, lons, PGA())
+    gridded = compute_intensity_gridded(rupture, lats, lons, PGA())
+    assert np.allclose(exact, gridded, rtol=0.05)

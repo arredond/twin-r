@@ -25,7 +25,11 @@ import pandas as pd
 
 from .damage import evaluate_damage_batch
 from .fragility_lookup import FragilityTable
-from .ground_motion import compute_sa03_gridded, estimate_significant_distance_km
+from .ground_motion import (
+    IM_TYPE_TO_IMT,
+    compute_intensity_gridded,
+    estimate_significant_distance_km,
+)
 from .rupture import Rupture
 
 _KM_PER_DEGREE_LAT = 111.0
@@ -34,8 +38,9 @@ _RESULT_COLUMNS = [
     "building_id",
     "lon",
     "lat",
-    "sa03_g",
     "damage_state",
+    "im_value",
+    "im_type",
     "prob_none",
     "prob_slight",
     "prob_moderate",
@@ -155,12 +160,17 @@ def run_scenario(
     `sigma_multiplier` -- see `estimate_significant_distance_km`'s own
     docstring for why that consistency matters.
 
-    Columns: building_id, lon, lat, sa03_g, damage_state, prob_none,
-    prob_slight, prob_moderate, prob_extensive, prob_complete. `lon`/`lat`
-    (the same precomputed centroid columns `_load_sites` already reads) ride
-    along so a caller that keeps only a subset of rows (local.py/handler.py
-    drop the confidently-undamaged majority, see their own docstrings) can
-    still place the ones it keeps on a map without a second lookup.
+    Columns: building_id, lon, lat, damage_state, im_value, im_type,
+    prob_none, prob_slight, prob_moderate, prob_extensive, prob_complete.
+    `lon`/`lat` (the same precomputed centroid columns `_load_sites`
+    already reads) ride along so a caller that keeps only a subset of rows
+    (local.py/handler.py drop the confidently-undamaged majority, see
+    their own docstrings) can still place the ones it keeps on a map
+    without a second lookup. `im_value`/`im_type` are the ground-motion
+    value and intensity-measure type each building was *actually*
+    evaluated against -- see `evaluate_damage_batch`'s docstring for why
+    that varies by building instead of being one scenario-wide SA(0.3s)
+    value (docs/validation-lorca-2011.md §10.2).
     """
     if max_distance_km is None:
         max_distance_km = estimate_significant_distance_km(
@@ -172,22 +182,31 @@ def run_scenario(
     if sites.empty:
         return pd.DataFrame(columns=_RESULT_COLUMNS)
 
-    sites["sa03_g"] = compute_sa03_gridded(
-        rupture, sites["lat"].to_numpy(), sites["lon"].to_numpy(), sigma_multiplier=sigma_multiplier
-    )
-
     fragility_table = FragilityTable.from_parquet(fragility_path)
+
+    # Only the IM types this fragility set actually vendors (FragilityTable.
+    # used_im_types), not every entry in IM_TYPE_TO_IMT -- avoids paying for
+    # a GMPE evaluation of an IM type nothing here is indexed by.
+    lats = sites["lat"].to_numpy()
+    lons = sites["lon"].to_numpy()
+    im_values_by_type = {
+        im_type: compute_intensity_gridded(
+            rupture, lats, lons, IM_TYPE_TO_IMT[im_type], sigma_multiplier=sigma_multiplier
+        )
+        for im_type in fragility_table.used_im_types()
+    }
+
     damage = evaluate_damage_batch(
         fragility_table,
         sites["taxonomy_class"].to_numpy(),
         sites["height_class"].to_numpy(),
-        sites["sa03_g"].to_numpy(),
+        im_values_by_type,
         damage_percentile=damage_percentile,
     )
 
     result = pd.concat(
         [
-            sites[["building_id", "lon", "lat", "sa03_g"]].reset_index(drop=True),
+            sites[["building_id", "lon", "lat"]].reset_index(drop=True),
             damage.reset_index(drop=True),
         ],
         axis=1,

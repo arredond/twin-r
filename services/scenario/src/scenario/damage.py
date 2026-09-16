@@ -95,7 +95,7 @@ def evaluate_damage_batch(
     fragility_table: FragilityTable,
     taxonomy_classes: np.ndarray,
     height_classes: np.ndarray,
-    im_values: np.ndarray,
+    im_values_by_type: dict[str, np.ndarray],
     damage_percentile: float | None = None,
 ) -> pd.DataFrame:
     """Vectorized equivalent of calling `evaluate_building_damage` once per
@@ -108,6 +108,17 @@ def evaluate_damage_batch(
     tens of minutes. See test_damage.py for a cross-check against the
     scalar path on the same inputs.
 
+    `im_values_by_type`: `{im_type_label: array}`, one entry per intensity
+    measure `ground_motion.py` computed (e.g. `{"PGA [g]": ..., "SA(0.3s)
+    [g]": ...}`), each array aligned with `taxonomy_classes`/`height_classes`
+    (one value per building, at that building's location, for that IM
+    type -- *not* one value per group). Each (taxonomy, height) group looks
+    up its own curve's `im_type` (`FragilityCurve.im_type`) and reads its IM
+    values from the matching array -- this is the fix for
+    docs/validation-lorca-2011.md §10.2: previously every building was
+    evaluated against a single SA(0.3s) array regardless of which IM type
+    its own curve was actually indexed by.
+
     `damage_percentile`: see `select_damage_state` -- `None` (default)
     picks each building's modal state (argmax); a float in (0, 1] picks the
     smallest state whose cumulative probability reaches it, vectorized as
@@ -118,10 +129,15 @@ def evaluate_damage_batch(
     documents).
 
     Returns a DataFrame indexed like the inputs, columns: damage_state,
-    prob_none, prob_slight, prob_moderate, prob_extensive, prob_complete.
+    im_value, im_type, prob_none, prob_slight, prob_moderate,
+    prob_extensive, prob_complete. `im_value`/`im_type` record which IM
+    value/type each building was *actually* evaluated against, since that
+    now varies by building rather than being one scenario-wide constant.
     """
     n = len(taxonomy_classes)
     damage_states = np.empty(n, dtype=object)
+    im_values_used = np.empty(n, dtype=float)
+    im_types_used = np.empty(n, dtype=object)
     prob_arrays = {state: np.zeros(n) for state in DAMAGE_STATES}
 
     groups = (
@@ -136,7 +152,9 @@ def evaluate_damage_batch(
     for (taxonomy_class, height_class), idx in groups.items():  # pyrefly: ignore
         idx = np.asarray(idx)
         curve = fragility_table.get(taxonomy_class, height_class)
-        im = np.asarray(im_values)[idx]
+        im = np.asarray(im_values_by_type[curve.im_type])[idx]
+        im_values_used[idx] = im
+        im_types_used[idx] = curve.im_type
 
         exceedance = {
             state: np.interp(im, curve.im_values[state], curve.prob_exceedance[state])
@@ -171,6 +189,8 @@ def evaluate_damage_batch(
     return pd.DataFrame(
         {
             "damage_state": damage_states,
+            "im_value": im_values_used,
+            "im_type": im_types_used,
             **{f"prob_{state.lower()}": prob_arrays[state] for state in DAMAGE_STATES},
         }
     )

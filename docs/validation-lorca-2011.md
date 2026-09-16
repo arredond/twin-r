@@ -288,39 +288,74 @@ took some damage," and is a better validation metric than the modal-count
 headline this doc has used so far — worth adopting alongside (not instead
 of) the modal count in future validation runs.
 
-### 10.4 Recommendations, superseding §8's recommendation 1
+### 10.4 Recommendations, superseding §8's recommendation 1 — 1–3 done
 
-1. **Fix the IM-type bug** (`ground_motion.py`/`fragility_lookup.py`/
+1. ~~**Fix the IM-type bug** (`ground_motion.py`/`fragility_lookup.py`/
    `damage.py`/`engine.py`): compute PGA, SA(0.3s), SA(0.6s), SA(1.0s) from
    the same Akkar et al. (2014) GMPE (it already supports all four —
    confirmed directly), tag each vendored curve with its `im_type`
    (already a column in `fragility.parquet`, just unused downstream), and
    dispatch each building to the IM value matching its own curve. Same GMPE,
    no new dependency — this is a correctness fix that's overdue regardless
-   of Lorca.
-2. **Vendor `MUR-STRUB_LWAL-DNO`** (H1–H5, comfortably covers 99.95% of
+   of Lorca.~~ Done — see [ADR-0012](./decisions/0012-im-type-dispatch-and-vernacular-masonry-taxonomy.md).
+2. ~~**Vendor `MUR-STRUB_LWAL-DNO`** (H1–H5, comfortably covers 99.95% of
    Lorca's masonry stock by height) alongside the existing two classes in
    `pipelines/fragility`, and extend `taxonomy.py`'s single 1970 threshold to
    a second one (pre-1940 → `MUR-STRUB`, 1940–1970 → `MR_LWAL-DUL`, ≥1970 →
    `CR_LDUAL-DUL`) — exactly the refinement `taxonomy.py`'s own docstring
    already anticipates ("refine into multiple periods once we have reason to
    believe it changes results materially" — §10.3 is that reason, with a
-   number attached).
-3. **Land (1) and (2) together**, and re-run this exact scenario afterward —
-   §10.3 shows why doing only one is actively misleading.
+   number attached).~~ Done — see ADR-0012 and
+   [`docs/TAXONOMY.md`](./TAXONOMY.md) for the full class breakdown and
+   what would sharpen the 1940 threshold further.
+3. ~~**Land (1) and (2) together**, and re-run this exact scenario afterward —
+   §10.3 shows why doing only one is actively misleading.~~ Done — see
+   §10.6 below for the re-run.
 4. Real Lorca capacity curves from UPM (`questions-for-upm.md` §1) remain
    the only path to an actual calibration rather than a plausibility check —
-   unchanged from §8 recommendation 2.
+   unchanged from §8 recommendation 2. A related, narrower question (does
+   our masonry-era split match reality, or Lorca's field-surveyed Risk-UE
+   mix?) has been added to `questions-for-upm.md` §4.
 5. Out of scope here, deliberately: site amplification (blocked on real
    microzonation data, `questions-for-upm.md` §2) and the debris model (the
    Lorca-specific debris dataset/pipeline was left untouched, per explicit
    instruction). Note for later, at no cost to that constraint: debris rings
    are derived purely from `damage_state` at render time
-   (`pipelines/exposure/src/exposure/debris.py`), so fixing (1)/(2) improves
+   (`pipelines/exposure/src/exposure/debris.py`), so fixing (1)/(2) improved
    debris-layer fidelity for free, with no change to the debris pipeline
-   itself. **See §10.5 below** — one ground-motion-side lever turned out not
-   to need new data at all, and is probably the single largest contributor
-   of the three.
+   itself.
+
+### 10.6 Re-run with both fixes shipped (ADR-0012)
+
+Re-ran this exact scenario end-to-end through the real (now-shipped) code
+path, not the §10.3 scratch harness — three taxonomy classes, correct
+per-building IM dispatch, at all three probability levels (ADR-0011):
+
+| Tier | Expected ≥Slight (Σ P, of 27,884) | Modal-state counts |
+|---|---|---|
+| High (median GM) | **983** | 27,884 None (unchanged — see §10.3's caveat, still applies) |
+| Low (median+1σ GM) | 5,087 | 25,742 None, 2,142 Slight |
+| Very low (median+1σ GM, P85 damage) | 5,087 | 16,460 None, 9,944 Slight, 1,480 Moderate |
+
+The expected-value number at the original "high" tier (983) now lands
+essentially *at* the original all-bugs baseline (977, §10.3's variant A) —
+not below it, as the earlier scratch estimate for "both fixes together"
+(854) suggested. The difference from that estimate comes from this being
+the real shipped taxonomy split (1940 threshold, unknown-year buildings
+conservatively assigned to `MUR-STRUB_LWAL-DNO` — 5,870 buildings, vs. the
+scratch experiment's cruder pre-1945/unknown handling) and the real
+per-building IM dispatch (including H4/H5 buildings' SA(0.6s)/SA(1.0s)
+curves, which the scratch harness didn't isolate). Combined with the
+probability-level tiers (§10.5/ADR-0011), "low" and "very low" now produce
+a qualitatively different, non-degenerate picture — thousands of buildings
+showing Slight/Moderate damage, rather than zero at every tier as the
+original §2/§3 baseline did.
+
+This remains a plausibility check, not a calibration exercise — §1's
+caveat about the 6,416 *inspected* buildings not being directly comparable
+to a full-stock modal or expected-value count still applies, and real
+Lorca capacity curves (`questions-for-upm.md` §1) remain the only path to
+an actual calibration.
 
 ### 10.5 A third lever, found independently: the missing probability-level
 dimension, and how well it happens to fit this specific event

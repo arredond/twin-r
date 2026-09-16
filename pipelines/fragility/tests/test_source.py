@@ -2,7 +2,7 @@ from fragility.source import DAMAGE_STATES, TAXONOMY_CLASSES
 
 
 def test_taxonomy_classes_defined():
-    assert TAXONOMY_CLASSES == ["CR_LDUAL-DUL", "MR_LWAL-DUL"]
+    assert TAXONOMY_CLASSES == ["CR_LDUAL-DUL", "MR_LWAL-DUL", "MUR-STRUB_LWAL-DNO"]
 
 
 def test_damage_states_defined_in_severity_order():

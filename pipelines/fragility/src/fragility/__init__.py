@@ -12,9 +12,13 @@ Earthquake Engineering.
 We vendor a curated subset (not the full ~561-file repository) covering the
 GEM-taxonomy classes our exposure pipeline's taxonomy heuristic
 (pipelines/exposure) can actually produce: reinforced-concrete dual-system
-low-ductility (CR_LDUAL-DUL) and unreinforced masonry load-bearing-wall
-low-ductility (MR_LWAL-DUL), across the height classes (H1..H12) relevant to
-Lorca's building stock.
+low-ductility (CR_LDUAL-DUL), generic unreinforced masonry load-bearing-wall
+low-ductility (MR_LWAL-DUL), and unreinforced rubble-stone masonry, no
+ductility (MUR-STRUB_LWAL-DNO -- added per docs/validation-lorca-2011.md
+§10.1/§10.4, for pre-1940 vernacular construction MR_LWAL-DUL understates
+the vulnerability of), across the height classes (H1..H12, or H1..H5 for
+MUR-STRUB_LWAL-DNO -- see TAXONOMY_CLASSES) relevant to Lorca's building
+stock.
 """
 
 from .source import TAXONOMY_CLASSES, fetch_fragility_functions, write_fragility_parquet

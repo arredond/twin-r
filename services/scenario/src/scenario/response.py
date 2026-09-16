@@ -4,7 +4,7 @@ so the two runtimes can't drift on this logic.
 
 The frontend only ever reads `building_id`, `damage_state` (map colour) and
 the five `prob_*` fields (click-popup breakdown) -- see
-apps/web/src/components/DamageMap.tsx. `lon`/`lat`/`sa03_g` ride along on
+apps/web/src/components/DamageMap.tsx. `lon`/`lat`/`im_value`/`im_type` ride along on
 engine.py's own contract (useful to a caller that wants the full picture),
 but every building the frontend colors is already a feature in the
 buildings PMTiles layer it joins against by `building_id`, so shipping its
@@ -37,8 +37,8 @@ def prepare_response_buildings(result: pd.DataFrame) -> pd.DataFrame:
     """Filter to damaged/uncertain buildings and trim to the thin payload.
 
     `result` is engine.py's full per-building DataFrame (building_id, lon,
-    lat, sa03_g, damage_state, prob_*). Returns a DataFrame with only the
-    columns the frontend needs, ready for `.to_dict(orient="records")`.
+    lat, damage_state, im_value, im_type, prob_*). Returns a DataFrame with
+    only the columns the frontend needs, ready for `.to_dict(orient="records")`.
     """
     max_other_prob = result[
         ["prob_slight", "prob_moderate", "prob_extensive", "prob_complete"]

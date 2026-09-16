@@ -107,7 +107,8 @@ def _run_and_serialize(rupture: Rupture, probability_level: str) -> dict:
         n_evaluated = len(result)
         # Filters to damaged/uncertain buildings and trims to the thin
         # frontend-facing payload (see response.py's docstring for why
-        # lon/lat/sa03_g are dropped and damage_state becomes an int code).
+        # lon/lat/im_value/im_type are dropped and damage_state becomes an
+        # int code).
         result = prepare_response_buildings(result)
         elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
     except FileNotFoundError as e:

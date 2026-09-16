@@ -106,7 +106,7 @@ Catastro ourselves for the MVP (27,884 buildings for Lorca; now expanded to
 Murcia + Andalucía), but have no ground truth to check our taxonomy-
 assignment heuristic against.
 
-**Question:** Would it be possible to share Lorca's building-level
+**Question (a):** Would it be possible to share Lorca's building-level
 vulnerability classifications (even without the fieldwork attributes behind
 them) for validation purposes only — comparing our Catastro-derived,
 heuristic taxonomy against your surveyed one, building by building?
@@ -114,6 +114,28 @@ heuristic taxonomy against your surveyed one, building by building?
 **What we'd do with it:** Quantify how good (or bad) our no-fieldwork
 taxonomy heuristic actually is, which is currently an open, unvalidated
 assumption flagged in `milestone-1-plan.md` §2 and `validation-lorca-2011.md`.
+
+**Question (b), added per [ADR-0012](./decisions/0012-im-type-dispatch-and-vernacular-masonry-taxonomy.md)
+and [`TAXONOMY.md`](./TAXONOMY.md) — a smaller, cheaper ask than (a):**
+`merisur.md` §4.5 states that remote-sensing work identified **six Risk-UE
+Model Building Types in Lorca (one reinforced-concrete class, five masonry
+classes)**, but neither paper we have in hand names the five masonry
+classes or their share of Lorca's building stock. We currently collapse
+all pre-1970 masonry into just two generic classes ourselves (a "modern
+masonry" class for 1940–1969, a "vernacular rubble-stone" class for
+pre-1940/unknown-year construction — chosen because Lorca's old town is
+documented as predominantly stone masonry, not because we have any data
+confirming that split). **Could you share just the five MBT names/
+descriptions and, ideally, their approximate proportion of Lorca's
+building stock** — no building-level data needed for this part, unlike
+question (a)?
+
+**What we'd do with it:** Replace our two-class masonry split (and its
+1940 threshold, currently an undocumented judgment call) with classes that
+actually match what's present in Lorca, and/or vendor additional Martins &
+Silva (2020) masonry sub-classes (adobe, dressed stone, confined
+pre/post-1999) our fragility pipeline doesn't currently include — see
+`TAXONOMY.md` §4 for the full list of what's available but unused.
 
 ### 5. IDCM/FEMA 440 implementation details
 

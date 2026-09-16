@@ -37,10 +37,11 @@ export interface Fault {
 
 // Thin per-building payload (services/scenario/response.py): building_id +
 // damage_state_code (index into DAMAGE_STATES, ../damageColors.ts) + the
-// five probabilities. No lon/lat/sa03_g -- every building here is already
-// a feature in the buildings PMTiles layer, joined by building_id
+// five probabilities. No lon/lat/im_value/im_type -- every building here is
+// already a feature in the buildings PMTiles layer, joined by building_id
 // (DamageMap.tsx), so shipping coordinates a second time would be pure
-// waste; sa03_g isn't rendered anywhere.
+// waste; the intensity value/type each building was evaluated against
+// isn't rendered anywhere.
 export interface BuildingDamageResult {
   building_id: string;
   damage_state_code: number;

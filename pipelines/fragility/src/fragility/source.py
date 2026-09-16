@@ -20,7 +20,16 @@ _HEIGHT_CLASSES = range(1, 13)
 # (material, lateral system + ductility) pairs we vendor. See exposure's
 # taxonomy heuristic (pipelines/exposure/src/exposure/taxonomy.py) for how a
 # building's (construction_year, floors) maps to one of these.
-TAXONOMY_CLASSES = ["CR_LDUAL-DUL", "MR_LWAL-DUL"]
+#
+# `MUR-STRUB_LWAL-DNO` (unreinforced rubble-stone masonry, no ductility)
+# added per docs/validation-lorca-2011.md §10.1/§10.4: `MR_LWAL-DUL` -- a
+# broad, globally-averaged masonry class -- turned out to be the *least*
+# vulnerable of six comparable vernacular-masonry classes this same vendor
+# repo publishes, not merely a coarse stand-in. Only H1-H5 exist upstream
+# for this class (vs. H1-H12 for the other two) -- `_file_names` requesting
+# H6-H12 for it 404s and is skipped, same handling `fetch_fragility_functions`
+# already has for any (class, height) combination that doesn't exist.
+TAXONOMY_CLASSES = ["CR_LDUAL-DUL", "MR_LWAL-DUL", "MUR-STRUB_LWAL-DNO"]
 
 DAMAGE_STATES = ["Slight_damage", "Moderate_damage", "Extensive_damage", "Complete_damage"]
 
