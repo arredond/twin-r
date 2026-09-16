@@ -162,6 +162,39 @@ function escapeHtml(value: unknown): string {
   );
 }
 
+// A national very-low-probability scenario can return 100k+ buildings
+// (elevated ground motion + the 85th-percentile damage threshold both
+// widen how many buildings are a genuine close call, see
+// docs/validation-region-expansion.md) -- applying setFeatureState to all
+// of them one at a time in a single synchronous loop is enough work to
+// visibly freeze the tab for several seconds. Spreading the same calls
+// across idle/animation-frame chunks keeps the map interactive while the
+// coloring catches up progressively instead of all at once; `isStale`
+// lets a still-running chunk of an older result abandon itself once a
+// newer one has started (e.g. the user ran a second scenario before the
+// first finished applying).
+const FEATURE_STATE_CHUNK_SIZE = 5000;
+
+function scheduleChunked<T>(
+  items: T[],
+  apply: (item: T) => void,
+  isStale: () => boolean,
+  onDone?: () => void,
+  chunkSize = FEATURE_STATE_CHUNK_SIZE
+): void {
+  let i = 0;
+  const schedule =
+    typeof requestIdleCallback === "function" ? requestIdleCallback : requestAnimationFrame;
+  const step = () => {
+    if (isStale()) return;
+    const end = Math.min(i + chunkSize, items.length);
+    for (; i < end; i++) apply(items[i]);
+    if (i < items.length) schedule(step);
+    else onDone?.();
+  };
+  step();
+}
+
 const EARTH_RADIUS_KM = 6371;
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -373,10 +406,15 @@ export function DamageMap({
   const mapLoadedRef = useRef(false);
   const loadedBuildingIdsRef = useRef<Set<string>>(new Set());
   const loadedDebrisBuildingIdsRef = useRef<Set<string>>(new Set());
+  // Bumped once per `results` change in each of the two feature-state
+  // effects below -- lets a chunked run still in progress (scheduleChunked)
+  // recognize it's been superseded by a newer one and stop applying.
+  const buildingFeatureStateRunIdRef = useRef(0);
+  const debrisFeatureStateRunIdRef = useRef(0);
   const loadedMunicipalityCodesRef = useRef<Set<string>>(new Set());
   // Municipality popup needs the latest stats (by municipality_code) to
   // show a clicked polygon's breakdown, without re-binding the click
-  // handler -- same pattern as resultsRef below.
+  // handler -- same pattern as resultsByIdRef below.
   const municipalityStatsRef = useRef(municipalityStats);
   municipalityStatsRef.current = municipalityStats;
   // Click-to-highlight (buildings and debris share one selection -- a
@@ -397,9 +435,17 @@ export function DamageMap({
   onMapMoveRef.current = onMapMove;
   // Building-click popup needs the latest scenario results (and the
   // region they were evaluated against) to classify a clicked building,
-  // without re-binding the click handler.
-  const resultsRef = useRef(results);
-  resultsRef.current = results;
+  // without re-binding the click handler. Indexed by building_id (a
+  // national very-low-probability scenario can return 100k+ buildings,
+  // see docs/decisions -- a plain array .find() per click would be an
+  // O(n) scan over all of them).
+  const resultsById = useMemo(() => {
+    const byId = new Map<string, BuildingDamageResult>();
+    for (const b of results ?? []) byId.set(b.building_id, b);
+    return byId;
+  }, [results]);
+  const resultsByIdRef = useRef(resultsById);
+  resultsByIdRef.current = resultsById;
   const evaluatedRegionRef = useRef(evaluatedRegion);
   evaluatedRegionRef.current = evaluatedRegion;
 
@@ -496,15 +542,19 @@ export function DamageMap({
         minzoom: BUILDING_DETAIL_MINZOOM,
         paint: {
           "fill-color": DEBRIS_COLOR,
-          // A ring only renders once its building's damage state has
-          // reached/passed that ring's number (ring 1 = Slight, ADR-0010) --
+          // Only the ring matching a building's *current* predicted damage
+          // state renders (ring 1 = Slight, ADR-0010) -- not every ring at
+          // or below it, which would stack e.g. both the slight and
+          // moderate rings for a Moderate-damage building. `<=` was tried
+          // first and produced exactly that stacking; `==` shows just the
+          // one ring that corresponds to the actual predicted state.
           // ["feature-state", "damage_state_code"] is unset (null) for any
           // building no scenario has touched yet, so `coalesce` to -1
           // keeps every ring hidden by default rather than comparing
           // against null.
           "fill-opacity": [
             "case",
-            ["<=", ["get", "ring"], ["coalesce", ["feature-state", "damage_state_code"], -1]],
+            ["==", ["get", "ring"], ["coalesce", ["feature-state", "damage_state_code"], -1]],
             DEBRIS_RING_OPACITY,
             0,
           ],
@@ -601,7 +651,7 @@ export function DamageMap({
       // Building click popup: floors/construction year/use/cadastral id
       // come straight off the clicked tile feature (no request needed);
       // taxonomy/height class need a /buildings/{id} lookup, and damage
-      // comes from whatever scenario has already been run (resultsRef).
+      // comes from whatever scenario has already been run (resultsByIdRef).
       // Registered before the generic "click anywhere" handler below so a
       // building click never also falls through to onMapClick (that
       // handler checks queryRenderedFeatures itself and skips when this
@@ -615,8 +665,7 @@ export function DamageMap({
 
         selectBuilding(buildingId);
 
-        const damage =
-          resultsRef.current?.find((b) => b.building_id === buildingId) ?? null;
+        const damage = resultsByIdRef.current.get(buildingId) ?? null;
         const withinEvaluatedRegion = isWithinEvaluatedRegion(
           evaluatedRegionRef.current,
           e.lngLat.lat,
@@ -661,6 +710,16 @@ export function DamageMap({
         const buildingId = tileProps.building_id as string | undefined;
         const ring = Number(tileProps.ring);
         if (!buildingId || !Number.isFinite(ring)) return;
+
+        // Every ring feature is still hit-testable regardless of paint
+        // opacity (fill-opacity 0 still hit-tests, unlike a filtered-out
+        // feature -- see the municipality filter's own comment on this) --
+        // a click on any ring below the building's actual predicted damage
+        // state would otherwise select/pop up a ring that isn't actually
+        // shown. Only the ring matching the current damage state (the one
+        // the fill-opacity expression above actually renders) responds.
+        const damage = resultsByIdRef.current.get(buildingId);
+        if (!damage || ring !== damage.damage_state_code) return;
 
         selectDebrisRing(buildingId, ring);
 
@@ -771,6 +830,10 @@ export function DamageMap({
     const map = mapRef.current;
     if (!map) return;
 
+    buildingFeatureStateRunIdRef.current += 1;
+    const runId = buildingFeatureStateRunIdRef.current;
+    const isStale = () => buildingFeatureStateRunIdRef.current !== runId;
+
     const applyFeatureState = () => {
       // Vector sources require sourceLayer on every feature-state call --
       // omitting it fails silently-ish (throws, caught nowhere, leaving
@@ -779,17 +842,25 @@ export function DamageMap({
       const target = { source: BUILDINGS_SOURCE_ID, sourceLayer: "buildings" };
 
       // Clear previous run's coloring first, so damaged buildings from a
-      // smaller/differently-located scenario don't stay colored.
-      for (const id of loadedBuildingIdsRef.current) {
-        map.removeFeatureState({ ...target, id });
-      }
+      // smaller/differently-located scenario don't stay colored. Chunked
+      // (see scheduleChunked above) same as the coloring loop itself --
+      // the previous run can be just as large.
+      const idsToClear = Array.from(loadedBuildingIdsRef.current);
       loadedBuildingIdsRef.current = new Set();
 
-      for (const building of results ?? []) {
-        const color = DAMAGE_COLORS[damageStateLabel(building.damage_state_code)] ?? DAMAGE_COLORS.Unknown;
-        map.setFeatureState({ ...target, id: building.building_id }, { color });
-        loadedBuildingIdsRef.current.add(building.building_id);
-      }
+      scheduleChunked(
+        idsToClear,
+        (id) => map.removeFeatureState({ ...target, id }),
+        isStale,
+        () => {
+          scheduleChunked(results ?? [], (building) => {
+            const color =
+              DAMAGE_COLORS[damageStateLabel(building.damage_state_code)] ?? DAMAGE_COLORS.Unknown;
+            map.setFeatureState({ ...target, id: building.building_id }, { color });
+            loadedBuildingIdsRef.current.add(building.building_id);
+          }, isStale);
+        }
+      );
     };
 
     if (map.isSourceLoaded(BUILDINGS_SOURCE_ID)) {
@@ -810,21 +881,30 @@ export function DamageMap({
     const map = mapRef.current;
     if (!map) return;
 
+    debrisFeatureStateRunIdRef.current += 1;
+    const runId = debrisFeatureStateRunIdRef.current;
+    const isStale = () => debrisFeatureStateRunIdRef.current !== runId;
+
     const applyDebrisFeatureState = () => {
       const target = { source: DEBRIS_SOURCE_ID, sourceLayer: "debris" };
 
-      for (const id of loadedDebrisBuildingIdsRef.current) {
-        map.removeFeatureState({ ...target, id });
-      }
+      const idsToClear = Array.from(loadedDebrisBuildingIdsRef.current);
       loadedDebrisBuildingIdsRef.current = new Set();
 
-      for (const building of results ?? []) {
-        map.setFeatureState(
-          { ...target, id: building.building_id },
-          { damage_state_code: building.damage_state_code }
-        );
-        loadedDebrisBuildingIdsRef.current.add(building.building_id);
-      }
+      scheduleChunked(
+        idsToClear,
+        (id) => map.removeFeatureState({ ...target, id }),
+        isStale,
+        () => {
+          scheduleChunked(results ?? [], (building) => {
+            map.setFeatureState(
+              { ...target, id: building.building_id },
+              { damage_state_code: building.damage_state_code }
+            );
+            loadedDebrisBuildingIdsRef.current.add(building.building_id);
+          }, isStale);
+        }
+      );
     };
 
     if (map.isSourceLoaded(DEBRIS_SOURCE_ID)) {
