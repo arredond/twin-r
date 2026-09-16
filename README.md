@@ -11,8 +11,10 @@ they needed their own crawlers -- see
 and [`docs/basque-navarra-cadastral-sources.md`](docs/basque-navarra-cadastral-sources.md)).
 All of Spain is now covered.
 See [`docs/milestone-1-plan.md`](docs/milestone-1-plan.md) for the
-milestone-1 plan and [`docs/decisions/`](docs/decisions/) for architecture
-decisions.
+milestone-1 plan, [`docs/decisions/`](docs/decisions/) for architecture
+decisions, and [`DATA-SOURCES.md`](DATA-SOURCES.md) for every external
+dataset in use, with links to the actual resource (ATOM feed / WFS
+endpoint) rather than a homepage.
 
 ## Layout
 
@@ -54,8 +56,18 @@ uv run python -m fragility data/fragility/fragility.parquet
 uv run python -m exposure.region_cli data/exposure_region/raw data/exposure_region/parts \
     data/exposure_region/exposure.parquet data/exposure_region/buildings.pmtiles
 
-# 2. Copy whichever buildings.pmtiles you built into the frontend's static assets
+# 1c. Municipal boundaries + aggregate stats (ADR-0013) -- powers the map's
+# low-zoom choropleth. Needs a `parts_dir` of `<ine_code>.buildings.parquet`
+# files to count buildings per municipality (region_cli's parts_dir from 1b,
+# or a single-municipality parts dir with just that one file for step 1).
+# Independent of region/province choice -- always one national download.
+uv run python -m exposure.municipalities_cli data/exposure/muni_raw data/exposure_region/parts \
+    data/exposure/municipalities.pmtiles data/exposure/municipalities.parquet
+
+# 2. Copy whichever buildings.pmtiles/debris.pmtiles/municipalities.pmtiles
+# you built into the frontend's static assets
 cp data/exposure/buildings.pmtiles apps/web/public/data/buildings.pmtiles
+cp data/exposure/municipalities.pmtiles apps/web/public/data/municipalities.pmtiles
 
 # 3. Start both the scenario API and the frontend together
 npm install --prefix apps/web

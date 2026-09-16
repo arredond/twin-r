@@ -6,8 +6,10 @@ the repo root [`README.md`](../../README.md) for the full quickstart and
 
 ## Local dev
 
-Needs `data/exposure/buildings.pmtiles` (from `pipelines/exposure`) copied
-into `public/data/buildings.pmtiles`, and the scenario function
+Needs `buildings.pmtiles`/`debris.pmtiles`/`municipalities.pmtiles` (from
+`pipelines/exposure`, see root README and
+[ADR-0013](../../docs/decisions/0013-municipal-boundary-choropleth.md))
+copied into `public/data/`, and the scenario function
 (`services/scenario`) running -- see root README.
 
 ```bash
@@ -19,6 +21,8 @@ Env vars (optional, `.env.local`):
 
 - `VITE_SCENARIO_API_URL` -- scenario function base URL (default `http://localhost:8000`)
 - `VITE_BUILDINGS_PMTILES_URL` -- buildings PMTiles URL (default `/data/buildings.pmtiles`)
+- `VITE_DEBRIS_PMTILES_URL` -- debris PMTiles URL (default `/data/debris.pmtiles`)
+- `VITE_MUNICIPALITIES_PMTILES_URL` -- municipal boundaries PMTiles URL (default `/data/municipalities.pmtiles`)
 
 ## Known gotcha
 

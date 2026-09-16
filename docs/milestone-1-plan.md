@@ -294,11 +294,13 @@ change is needed — only new pipeline output and a new frontend layer.
    Consequences for the measurement and fix. Region/national tiling not
    yet run — do that before trusting the ~9GB national extrapolation
    noted in ADR-0010.
-3. **Frontend**: a debris layer + toggle (matching MERISUR's separate
-   "Load result" / "Load debris" actions, `merisur.md` §5), styled via
-   `setFeatureState` off the `damage_state_code` a scenario call already
-   returns, joined by `building_id` — same pattern `DamageMap.tsx` already
-   uses for building color.
+3. **Frontend** ✅: a debris layer, styled via `setFeatureState` off the
+   `damage_state_code` a scenario call already returns, joined by
+   `building_id` — same pattern `DamageMap.tsx` already uses for building
+   color. Diverged from MERISUR's own separate "Load result" / "Load
+   debris" toggle during national-scale UI review: always shown after a
+   scenario run instead (no toggle), clickable with a popup, and in the
+   legend — a deliberate simplification, not a MERISUR-parity gap.
 4. **Follow-up, not blocking**: street/open-space clipping (party-wall
    exclusion alone doesn't distinguish a street from a private rear
    courtyard) and, if UPM shares it, the real 2023 debris-volume model in

@@ -12,10 +12,12 @@ pipelines/faults      QAFI (IGME) -----------> faults.parquet
 pipelines/exposure     Catastro (INSPIRE) ----> buildings.parquet (partitioned)
                                             \--> exposure.parquet
                                             \--> buildings.pmtiles
+                        IGN/CNIG (ADR-0013) ---> municipalities.parquet
+                                            \--> municipalities.pmtiles
 pipelines/fragility    Martins & Silva (2020) -> fragility.parquet
                                                         |
                                                         v
-                                           services/scenario reads all four
+                                          services/scenario reads all five
 ```
 
 ## `faults`: QAFI active faults
@@ -90,6 +92,31 @@ re-downloading:
 uv run python -m exposure.backfill "data/exposure_region/parts/*.buildings.parquet"
 ```
 
+### Municipal boundaries (`exposure.municipalities_cli`)
+
+Downloads IGN/CNIG's national municipal-boundary dataset (one GML zip,
+whole country, see [ADR-0013](../docs/decisions/0013-municipal-boundary-choropleth.md)
+and [`../DATA-SOURCES.md`](../DATA-SOURCES.md)), derives each polygon's
+5-digit INE code from IGN's own 11-digit `nationalCode` (its last 5
+digits), and attaches an `n_buildings` count per municipality by counting
+rows in whatever `<ine_code>.buildings.parquet` parts already exist under
+a given `parts_dir` -- no new per-building processing. Independent of
+region/province choice (always one national download); run it after an
+`exposure`/`exposure.region_cli` crawl, pointed at that crawl's
+`parts_dir`.
+
+```bash
+uv run python -m exposure.municipalities_cli data/exposure/muni_raw data/exposure_region/parts \
+    data/exposure/municipalities.pmtiles data/exposure/municipalities.parquet
+```
+
+Two outputs: `municipalities.pmtiles` (the frontend's low-zoom choropleth
+layer) and `municipalities.parquet`, a GeoParquet `services/scenario`
+spatially joins scenario results against server-side
+(`TWIN_R_MUNICIPALITIES_PATH`) to compute per-municipality aggregate
+stats -- see ADR-0013 for why that join is DuckDB spatial rather than a
+new geopandas/shapely dependency on the scenario service.
+
 ## `fragility`: Martins & Silva (2020) fragility functions
 
 Downloads a curated subset of the [global fragility/vulnerability function
@@ -115,9 +142,10 @@ re-running for a bigger area.
 ## Where it all lands
 
 `services/scenario` (see its own package for the request-handling side)
-reads all four outputs -- `buildings.parquet`, `exposure.parquet`,
-`fragility.parquet`, `faults.parquet` -- via configurable paths
-(`TWIN_R_BUILDINGS_PATH` etc., see `scenario/local.py`/`handler.py`), so
+reads all five outputs -- `buildings.parquet`, `exposure.parquet`,
+`fragility.parquet`, `faults.parquet`, `municipalities.parquet` -- via
+configurable paths (`TWIN_R_BUILDINGS_PATH` etc., see
+`scenario/local.py`/`handler.py`), so
 switching between the Lorca, Murcia+Andalucía, or national dataset is an
 environment-variable change, not a code change. `bin/twinr` (repo root)
 starts the local dev stack against whichever dataset its env vars point at.
