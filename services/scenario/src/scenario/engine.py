@@ -38,6 +38,7 @@ _RESULT_COLUMNS = [
     "building_id",
     "lon",
     "lat",
+    "municipality_code",
     "damage_state",
     "im_value",
     "im_type",
@@ -106,6 +107,7 @@ def _load_sites(
             b.building_id,
             b.centroid_lon AS lon,
             b.centroid_lat AS lat,
+            b.municipality_code,
             e.taxonomy_class,
             e.height_class
         FROM read_parquet(?) AS b
@@ -160,13 +162,18 @@ def run_scenario(
     `sigma_multiplier` -- see `estimate_significant_distance_km`'s own
     docstring for why that consistency matters.
 
-    Columns: building_id, lon, lat, damage_state, im_value, im_type,
-    prob_none, prob_slight, prob_moderate, prob_extensive, prob_complete.
+    Columns: building_id, lon, lat, municipality_code, damage_state,
+    im_value, im_type, prob_none, prob_slight, prob_moderate,
+    prob_extensive, prob_complete.
     `lon`/`lat` (the same precomputed centroid columns `_load_sites`
     already reads) ride along so a caller that keeps only a subset of rows
     (local.py/handler.py drop the confidently-undamaged majority, see
     their own docstrings) can still place the ones it keeps on a map
-    without a second lookup. `im_value`/`im_type` are the ground-motion
+    without a second lookup. `municipality_code` is the plain INE/Foral
+    code column pipelines/exposure now stamps onto every building at
+    ingest time (`pipeline.build_exposure`) -- a column read, not a
+    per-request spatial join, is what lets `response.compute_municipality_stats`
+    aggregate cheaply. `im_value`/`im_type` are the ground-motion
     value and intensity-measure type each building was *actually*
     evaluated against -- see `evaluate_damage_batch`'s docstring for why
     that varies by building instead of being one scenario-wide SA(0.3s)
@@ -206,7 +213,7 @@ def run_scenario(
 
     result = pd.concat(
         [
-            sites[["building_id", "lon", "lat"]].reset_index(drop=True),
+            sites[["building_id", "lon", "lat", "municipality_code"]].reset_index(drop=True),
             damage.reset_index(drop=True),
         ],
         axis=1,

@@ -40,6 +40,7 @@ def data_dir(tmp_path: Path) -> Path:
     buildings = gpd.GeoDataFrame(
         {
             "building_id": ["b1", "b2", "b3-far"],
+            "municipality_code": ["30024", "30024", "02003"],
             "centroid_lon": [NEAR_LON, NEAR_LON + 0.001, FAR_LON],
             "centroid_lat": [NEAR_LAT, NEAR_LAT + 0.001, FAR_LAT],
             "bbox_xmin": [NEAR_LON, NEAR_LON, FAR_LON],

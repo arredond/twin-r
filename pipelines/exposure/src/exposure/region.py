@@ -251,7 +251,9 @@ def crawl_alava(raw_dir: str | Path, parts_dir: str | Path) -> list[tuple[str, i
         try:
             assert municipality.gml_path is not None
             buildings = load_inspire_bu_buildings(municipality.gml_path)
-            buildings, exposure = build_exposure(buildings, f"Alava-{municipality.ine_code}")
+            buildings, exposure = build_exposure(
+                buildings, f"Alava-{municipality.ine_code}", municipality.ine_code
+            )
             buildings.to_parquet(buildings_part)
             exposure.to_parquet(exposure_part, index=False)
             results.append((municipality.ine_code, len(buildings), None))
@@ -273,7 +275,9 @@ def _process_one_vizcaya(
     try:
         pages = vizcaya.download_buildings(municipality, muni_raw_dir)
         buildings = _concat_buildings([vizcaya.load_buildings(p) for p in pages])
-        buildings, exposure = build_exposure(buildings, f"Vizcaya-{municipality.name}")
+        buildings, exposure = build_exposure(
+            buildings, f"Vizcaya-{municipality.name}", municipality.ine_code
+        )
         buildings.to_parquet(buildings_part)
         exposure.to_parquet(exposure_part, index=False)
         result = (municipality.ine_code, len(buildings), None)
@@ -331,7 +335,7 @@ def crawl_navarra(raw_dir: str | Path, parts_dir: str | Path) -> tuple[str, int,
     try:
         pages = navarra.download_pages(raw_dir)
         buildings = _concat_buildings([load_inspire_bu_buildings(p) for p in pages])
-        buildings, exposure = build_exposure(buildings, "Navarra")
+        buildings, exposure = build_exposure(buildings, "Navarra", _NAVARRA_PART_CODE)
         buildings.to_parquet(buildings_part)
         exposure.to_parquet(exposure_part, index=False)
         result = (_NAVARRA_PART_CODE, len(buildings), None)
@@ -365,7 +369,7 @@ def crawl_gipuzkoa(raw_dir: str | Path, parts_dir: str | Path) -> tuple[str, int
         tiles = gipuzkoa.download_pages(raw_dir)
         buildings = _concat_buildings([load_inspire_bu_buildings(t) for t in tiles])
         buildings = buildings.drop_duplicates(subset="building_id").reset_index(drop=True)
-        buildings, exposure = build_exposure(buildings, "Gipuzkoa")
+        buildings, exposure = build_exposure(buildings, "Gipuzkoa", _GIPUZKOA_PART_CODE)
         buildings.to_parquet(buildings_part)
         exposure.to_parquet(exposure_part, index=False)
         result = (_GIPUZKOA_PART_CODE, len(buildings), None)
