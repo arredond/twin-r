@@ -1,0 +1,21 @@
+# Pre-commit hooks for twin-r's Python packages (services/, pipelines/,
+# infra/). See docs/ for the project's broader conventions.
+#
+# Install once per clone: uv run pre-commit install
+# Run manually over everything: uv run pre-commit run --all-files
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.7 # keep in sync with the ruff version pinned in pyproject.toml's dev group
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: pyrefly
+        name: pyrefly (type check)
+        entry: uv run pyrefly check
+        language: system
+        pass_filenames: false
+        types: [python]

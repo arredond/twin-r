@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# twinr: start/stop/restart the twin-r local dev stack (scenario API + web
+# frontend) in a tmux session, so both run in the background across
+# terminal sessions instead of needing two manually-managed `nohup` shells
+# (see docs/ for the "server wasn't running" class of bug this replaces).
+#
+# Usage: twinr start|stop|restart|status|attach
+#
+# Optional: symlink this onto your PATH, e.g.:
+#   ln -s "$(pwd)/bin/twinr" /usr/local/bin/twinr
+
+set -euo pipefail
+
+SESSION="twinr"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Defaults to the current widest-coverage dataset (see README's Quickstart
+# for how it's built). Override for a smaller/faster local dataset, e.g.
+# the single-municipality Lorca one from milestone 1:
+#   TWIN_R_BUILDINGS_PATH="data/exposure/buildings.parquet" \
+#   TWIN_R_EXPOSURE_PATH="data/exposure/exposure.parquet" \
+#   twinr start
+: "${TWIN_R_BUILDINGS_PATH:=data/exposure_spain/parts/*.buildings.parquet}"
+: "${TWIN_R_EXPOSURE_PATH:=data/exposure_spain/exposure.parquet}"
+
+API_CMD="cd '$REPO_ROOT' && TWIN_R_BUILDINGS_PATH='$TWIN_R_BUILDINGS_PATH' TWIN_R_EXPOSURE_PATH='$TWIN_R_EXPOSURE_PATH' uv run --package twin-r-scenario uvicorn scenario.local:app --port 8000 --reload"
+WEB_CMD="cd '$REPO_ROOT/apps/web' && npm run dev -- --port 5173"
+
+is_running() {
+  tmux has-session -t "$SESSION" 2>/dev/null
+}
+
+cmd_start() {
+  if is_running; then
+    echo "twinr: already running (session '$SESSION'). Use 'twinr status' or 'twinr attach'."
+    exit 0
+  fi
+  tmux new-session -d -s "$SESSION" -n api "$API_CMD"
+  tmux new-window -t "$SESSION" -n web "$WEB_CMD"
+  echo "twinr: started."
+  echo "  scenario API: http://localhost:8000  (tmux window 'api')"
+  echo "  web frontend: http://localhost:5173  (tmux window 'web')"
+  echo "  attach with: twinr attach   (or: tmux attach -t $SESSION)"
+}
+
+cmd_stop() {
+  if ! is_running; then
+    echo "twinr: not running."
+    exit 0
+  fi
+  tmux kill-session -t "$SESSION"
+  echo "twinr: stopped."
+}
+
+cmd_restart() {
+  is_running && cmd_stop
+  cmd_start
+}
+
+cmd_status() {
+  if is_running; then
+    echo "twinr: running."
+    tmux list-windows -t "$SESSION" -F '  #{window_name}: #{pane_current_command}'
+  else
+    echo "twinr: not running."
+  fi
+}
+
+cmd_attach() {
+  is_running || { echo "twinr: not running. Run 'twinr start' first." >&2; exit 1; }
+  tmux attach -t "$SESSION"
+}
+
+case "${1:-}" in
+  start)   cmd_start ;;
+  stop)    cmd_stop ;;
+  restart) cmd_restart ;;
+  status)  cmd_status ;;
+  attach)  cmd_attach ;;
+  *)
+    echo "usage: twinr start|stop|restart|status|attach" >&2
+    exit 2
+    ;;
+esac

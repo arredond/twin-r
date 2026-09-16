@@ -1,0 +1,21 @@
+[project]
+name = "twin-r-scenario"
+version = "0.1.0"
+description = "twin-r scenario function: rupture -> GMPE -> damage, runnable as a Lambda or locally"
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=1.1",
+    "openquake.engine>=3.19",
+    "fiona>=1.9",
+    "numpy>=1.26",
+    "pyarrow>=17.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/scenario"]

@@ -1,0 +1,41 @@
+[project]
+name = "twin-r"
+version = "0.1.0"
+description = "twin-r: a digital twin for multi-hazard risk assessment in Spain, starting with seismic risk."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv.workspace]
+members = [
+    "services/*",
+    "pipelines/*",
+    "infra",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "pytest>=8.0",
+    "pyrefly>=1.3",
+    "pre-commit>=3.8",
+    "httpx2>=0.1",  # starlette.testclient's HTTP client, for API-level tests
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["services", "pipelines"]
+
+[tool.pyrefly]
+project-includes = ["services/**", "pipelines/**", "infra/**"]
+project-excludes = ["**/.venv/**", "**/node_modules/**", "**/*.egg-info/**"]
+search-path = [
+    "services/scenario/src",
+    "pipelines/faults/src",
+    "pipelines/exposure/src",
+    "pipelines/fragility/src",
+    "infra",
+]

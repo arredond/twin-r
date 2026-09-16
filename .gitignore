@@ -1,0 +1,24 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv
+
+# Pipeline outputs (parquet, PMTiles, raw downloads) -- regenerate via
+# pipelines/*, don't commit multi-hundred-MB source data or its outputs.
+data/
+
+# Local copy of buildings.pmtiles for the frontend dev server -- copy it
+# from data/exposure/ after running the exposure pipeline (see apps/web/README.md).
+apps/web/public/data/
+
+# CDK
+infra/cdk.out/
+
