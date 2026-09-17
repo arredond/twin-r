@@ -78,6 +78,17 @@ MURCIA_ANDALUCIA_PROVINCES = {
 # each still writes into the same `parts_dir` this dict's crawl does, so
 # combine_exposure/tile_region below pick their output up automatically
 # without caring which crawl produced it.
+#
+# Ceuta/Melilla are codes **55**/**56** here, not their real INE province
+# codes 51/52 -- confirmed directly against the live root feed, which
+# labels them "Territorial office 55 Ceuta"/"Territorial office 56
+# Melilla". "51"/"52" *are* real codes in this feed too, but for unrelated
+# Murcia/Asturias overflow municipalities (Cartagena, Gijón, etc.) -- an
+# earlier version of this dict wrongly assumed 51/52 meant Ceuta/Melilla
+# and never crawled 55/56 at all, so those two were missing from the
+# national dataset until backfilled by hand (DATA-SOURCES.md has the full
+# note, including the `_CATASTRO_CODE_TO_INE` remap this caused downstream
+# in services/scenario/response.py and this package's municipalities.py).
 SPAIN_PROVINCES = {
     code: code
     for code in [
@@ -129,6 +140,8 @@ SPAIN_PROVINCES = {
         "50",
         "51",
         "52",
+        "55",
+        "56",
     ]
 }
 # (01 Álava, 20 Guipúzcoa, 48 Vizcaya, 31 Navarra deliberately excluded)
@@ -705,18 +718,87 @@ def tile_debris_region_by_province(
 
     tiles_output = Path(tiles_output)
     tiles_output.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        subprocess.run(
-            ["tile-join", "-f", "-o", str(tiles_output), *[str(p) for p in province_pmtiles]],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        print(e.stdout, file=sys.stderr)
-        print(e.stderr, file=sys.stderr)
-        raise
+    # Merged to a temp path first, only moved over `tiles_output` once
+    # tile-join succeeds -- `tiles_output` may already be a real, previously
+    # -completed national file (see ADR-0010's "Do not redo this from
+    # scratch"), and a merge that fails partway (this run has been killed
+    # for low memory multiple times already) must never leave a truncated
+    # file sitting at that path, the same reasoning as each province
+    # batch's own atomic write above.
+    with tempfile.TemporaryDirectory() as merge_tmp:
+        merged_path = Path(merge_tmp) / tiles_output.name
+        try:
+            subprocess.run(
+                ["tile-join", "-f", "-o", str(merged_path), *[str(p) for p in province_pmtiles]],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            print(e.stdout, file=sys.stderr)
+            print(e.stderr, file=sys.stderr)
+            raise
+        shutil.move(str(merged_path), str(tiles_output))
     return tiles_output
+
+
+def add_municipalities_to_buildings_tiles(
+    parts_dir: str | Path,
+    ine_codes: list[str],
+    existing_tiles: str | Path,
+) -> Path:
+    """Merge a handful of already-crawled municipalities' buildings into an
+    existing `buildings.pmtiles` via tippecanoe + `tile-join`, **without**
+    re-tiling any municipality already baked into `existing_tiles`.
+
+    For backfilling municipalities a prior crawl missed (e.g. Ceuta/Melilla:
+    Catastro's own ATOM feed files them under "territorial office" codes
+    55/56, not their real INE province codes 51/52 -- confirmed directly
+    against the live feed, not documented anywhere Catastro publishes)
+    without paying to re-tile all ~12.9M already-tiled buildings.
+    `tile_region` always rebuilds from *every* part in `parts_dir` -- fine
+    for a from-scratch national build, wasteful (and at this scale, a real
+    multi-hour/OOM-risk run, see ADR-0010) for adding a handful of
+    municipalities to an already-complete national tile set.
+
+    Same atomic-write reasoning as `tile_debris_region_by_province`:
+    `existing_tiles` is only overwritten (via `shutil.move`) once tile-join
+    has fully succeeded, so a failure partway through never leaves a
+    truncated file at the real path.
+    """
+    parts_dir = Path(parts_dir)
+    existing_tiles = Path(existing_tiles)
+    if not existing_tiles.exists():
+        raise ValueError(f"{existing_tiles} does not exist -- nothing to merge into")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        geojson_paths = []
+        for ine_code in ine_codes:
+            part = parts_dir / f"{ine_code}.buildings.parquet"
+            if not part.exists():
+                raise ValueError(f"no buildings.parquet part for {ine_code!r} in {parts_dir}")
+            buildings = gpd.read_parquet(part).drop(columns=SPATIAL_INDEX_COLUMNS, errors="ignore")
+            geojson_path = tmp_path / f"{part.stem}.geojson"
+            buildings.to_file(geojson_path, driver="GeoJSON")
+            geojson_paths.append(geojson_path)
+
+        new_tiles = tile_geojson_files(geojson_paths, tmp_path / "new.pmtiles")
+
+        merged_tiles = tmp_path / "merged.pmtiles"
+        try:
+            subprocess.run(
+                ["tile-join", "-f", "-o", str(merged_tiles), str(existing_tiles), str(new_tiles)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            print(e.stdout, file=sys.stderr)
+            print(e.stderr, file=sys.stderr)
+            raise
+        shutil.move(str(merged_tiles), str(existing_tiles))
+    return existing_tiles
 
 
 def tile_region(parts_dir: str | Path, tiles_output: str | Path) -> Path:

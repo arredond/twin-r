@@ -30,3 +30,23 @@ def test_compute_municipality_stats_with_empty_result_returns_empty_list():
     result = pd.DataFrame(columns=["building_id", "municipality_code", "damage_state"])
 
     assert compute_municipality_stats(result) == []
+
+
+def test_compute_municipality_stats_remaps_ceuta_melilla_to_real_ine_codes():
+    # Catastro files Ceuta/Melilla under its own "territorial office" codes
+    # (55101/56101), not their real INE codes (51001/52001) that
+    # municipalities.pmtiles/parquet (sourced from IGN) actually use --
+    # without the remap, DamageMap.tsx's join against the tile's ine_code
+    # would silently never match these two.
+    result = pd.DataFrame(
+        {
+            "building_id": ["b1", "b2"],
+            "municipality_code": ["55101", "56101"],
+            "damage_state": ["Slight", "Moderate"],
+        }
+    )
+
+    stats = compute_municipality_stats(result)
+    codes = {s["municipality_code"] for s in stats}
+
+    assert codes == {"51001", "52001"}

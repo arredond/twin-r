@@ -28,6 +28,26 @@ UNCERTAINTY_MARGIN = 0.15
 
 DAMAGE_STATE_CODES = {state: i for i, state in enumerate(DAMAGE_STATES)}
 
+# Catastro's ATOM feed doesn't always file a municipality under its real
+# INE code (Madrid: 28900, not INE 28079 -- pipelines/exposure/catastro.py's
+# own docstring). Ceuta/Melilla are a confirmed case: Catastro lists them as
+# "territorial offices" 55/56, not INE province codes 51/52, so buildings
+# there carry `municipality_code` "55101"/"56101" (pipeline.build_exposure
+# stamps Catastro's own code, per this module's docstring above) while
+# `municipalities.pmtiles`/`municipalities.parquet` (sourced from IGN, keyed
+# by real INE codes -- pipelines/exposure/municipalities.py) expect
+# "51001"/"52001". Without this remap, DamageMap.tsx's join
+# (`stats.municipality_code === tile's ine_code`, see its own comments)
+# silently fails for these two, and a scenario there would never highlight
+# them on the low-zoom choropleth. Kept in sync by hand with
+# `pipelines/exposure/municipalities.py`'s own `_CATASTRO_CODE_TO_INE` --
+# same two confirmed entries, not a general translator (see that module's
+# comment for why one wasn't built).
+_CATASTRO_CODE_TO_INE = {
+    "55101": "51001",  # Ceuta
+    "56101": "52001",  # Melilla
+}
+
 # Columns the frontend actually reads (see this module's docstring) --
 # building_id + damage_state_code + the five probabilities.
 _THIN_COLUMNS = ["building_id", "damage_state_code", *(f"prob_{s.lower()}" for s in DAMAGE_STATES)]
@@ -83,10 +103,14 @@ def compute_municipality_stats(result: pd.DataFrame) -> list[dict]:
 
     stats = []
     for code, group in result.groupby("municipality_code"):
+        # pandas' groupby(...) key is typed as an opaque Hashable union, not
+        # the actual `str` it holds at runtime here -- same known
+        # pandas-stubs limitation as damage.py's groupby(...).indices.
+        code = str(code)  # pyrefly: ignore
         state_counts = group["damage_state"].value_counts()
         stats.append(
             {
-                "municipality_code": code,
+                "municipality_code": _CATASTRO_CODE_TO_INE.get(code, code),
                 "n_evaluated": len(group),
                 "counts": {state: int(state_counts.get(state, 0)) for state in DAMAGE_STATES},
             }
