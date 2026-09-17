@@ -15,7 +15,7 @@ parts:
 - **12,369,432 buildings parsed, 0 failures.**
 - `exposure.parquet` (attributes only, one file): **70.3MB**.
 - `buildings.parquet` stays partitioned (ADR-0005): 15,196 files, ~1.1GB
-  combined under `data/exposure_spain/parts/`.
+  combined under `data/exposure/parts/`.
 - `tippecanoe` tiling all 15,196 GeoJSON parts (generated transiently,
   never persisted — see ADR-0005's `tile_region()`) into one PMTiles file:
   output **1.62GB** (up from 352MB for Murcia + Andalucía, roughly
@@ -85,7 +85,7 @@ cadastral systems, not the national Dirección General del Catastro's
 session added dedicated crawlers for all four
 (`pipelines/exposure/src/exposure/{alava,navarra,gipuzkoa,vizcaya}.py`,
 dispatched via `region_cli.py --basque-navarra`) and actually ran the
-crawl end to end: `data/exposure_spain/exposure.parquet` now has
+crawl end to end: `data/exposure/exposure.parquet` now has
 12,881,817 rows (up from this doc's original 12,369,432) and
 `apps/web/public/data/buildings.pmtiles` (1.68GB) was rebuilt and
 redeployed. Full source-by-source writeup:

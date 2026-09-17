@@ -75,7 +75,7 @@ building color (ADR-0003), and shows rings `<= damage_state_code`. No new
 scenario-function endpoint, no new response field.
 
 **Prototype at Lorca scale before committing nationally.** `buildings.pmtiles`
-nationwide is 1.6GB for 12.4M buildings (`data/exposure_spain`); four ring
+nationwide is 1.6GB for 12.4M buildings (`data/exposure`); four ring
 features per building is more geometry than a bare footprint, plausibly
 3-6x that once tiled — unmeasured. Build and visually validate the Lorca
 debris layer (27,884 buildings) first, same rollout order the project
@@ -134,7 +134,8 @@ against real Lorca street layout can be judged visually.
   "Load result" / "Load debris" actions, `docs/merisur.md` §5), wired to
   the damage result the scenario call already returns — no new API call
   per scenario run.
-- **Measured against real Lorca data** (27,884 buildings, `data/exposure`):
+- **Measured against real Lorca data** (27,884 buildings, in the
+  since-retired Lorca-only dataset):
   computing all rings for the whole municipality takes ~21s (`debris.py`'s
   per-building neighbor-query + buffer/difference loop — fine offline, not
   something to run per request). 27,877 of 27,884 buildings get at least

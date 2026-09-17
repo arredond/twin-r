@@ -9,7 +9,9 @@ Basque Country and Navarra (which run separate Foral cadastral systems, so
 they needed their own crawlers -- see
 [`docs/decisions/0005-region-scale-crawling.md`](docs/decisions/0005-region-scale-crawling.md)
 and [`docs/basque-navarra-cadastral-sources.md`](docs/basque-navarra-cadastral-sources.md)).
-All of Spain is now covered.
+All of Spain is now covered, in the single `data/exposure` dataset (the
+Lorca-only and Murcia+Andalucía-only datasets those milestones used along
+the way have been retired).
 See [`docs/milestone-1-plan.md`](docs/milestone-1-plan.md) for the
 milestone-1 plan, [`docs/decisions/`](docs/decisions/) for architecture
 decisions, and [`DATA-SOURCES.md`](DATA-SOURCES.md) for every external
@@ -41,27 +43,26 @@ Requires: `uv`, Node.js, [`tippecanoe`](https://github.com/felt/tippecanoe)
 ```bash
 uv sync --all-packages
 
-# 1. Run the data pipelines (writes into ./data/, gitignored)
+# 1. Run the data pipelines (writes into ./data/, gitignored). The
+# exposure crawl covers all of Spain -- Catastro's national INSPIRE feed
+# via --spain, plus the Basque Country/Navarra's own separate Foral
+# cadastral systems via --basque-navarra (resumable, safe to re-run/Ctrl-C
+# -- see docs/decisions/0005-region-scale-crawling.md and
+# pipelines/README.md). buildings.parquet ends up *partitioned*
+# ("data/exposure/parts/*.buildings.parquet") -- there's no single
+# combined buildings file, by design (see region.py's own docstring);
+# exposure.parquet is combined into one file.
 uv run python -m faults data/faults/qafi_faults.parquet   # requires `unar` (brew install unar)
-uv run python -m exposure data/exposure/raw/lorca data/exposure/buildings.parquet \
-    data/exposure/exposure.parquet data/exposure/buildings.pmtiles
+uv run python -m exposure.region_cli data/exposure/raw data/exposure/parts \
+    data/exposure/exposure.parquet data/exposure/buildings.pmtiles \
+    --spain --basque-navarra
 uv run python -m fragility data/fragility/fragility.parquet
 
-# 1b. Or crawl a whole region instead of one municipality -- defaults to
-# Murcia + Andalucía's 9 provinces, pass --spain for every province
-# reachable through this pipeline (resumable, safe to re-run/Ctrl-C -- see
-# docs/decisions/0005-region-scale-crawling.md and pipelines/README.md).
-# buildings.parquet ends up *partitioned*: point TWIN_R_BUILDINGS_PATH at
-# "<parts_dir>/*.buildings.parquet".
-uv run python -m exposure.region_cli data/exposure_region/raw data/exposure_region/parts \
-    data/exposure_region/exposure.parquet data/exposure_region/buildings.pmtiles
-
-# 1c. Municipal boundaries + aggregate stats (ADR-0013) -- powers the map's
-# low-zoom choropleth. Needs a `parts_dir` of `<ine_code>.buildings.parquet`
-# files to count buildings per municipality (region_cli's parts_dir from 1b,
-# or a single-municipality parts dir with just that one file for step 1).
-# Independent of region/province choice -- always one national download.
-uv run python -m exposure.municipalities_cli data/exposure/muni_raw data/exposure_region/parts \
+# 1b. Municipal boundaries + aggregate stats (ADR-0013) -- powers the map's
+# low-zoom choropleth. Needs the parts_dir from step 1 to count buildings
+# per municipality. Independent of the exposure crawl otherwise -- always
+# one national download.
+uv run python -m exposure.municipalities_cli data/exposure/muni_raw data/exposure/parts \
     data/exposure/municipalities.pmtiles data/exposure/municipalities.parquet
 
 # 2. Copy whichever buildings.pmtiles/debris.pmtiles/municipalities.pmtiles
@@ -78,9 +79,11 @@ Open http://localhost:5173, submit a manual rupture or pick a fault in the
 sidebar, and the map colors buildings by resulting damage state.
 `bin/twinr` defaults to whichever dataset `TWIN_R_BUILDINGS_PATH`/
 `TWIN_R_EXPOSURE_PATH` point at (see the script's own comments) -- set
-those env vars before `twinr start` to point at a different one, e.g. the
-single-municipality Lorca dataset from step 1 instead of a region crawl
-from step 1b.
+those env vars before `twinr start` to point at a different one, e.g. a
+single-municipality test crawl (`uv run python -m exposure <raw_dir>
+<buildings.parquet> <exposure.parquet> <buildings.pmtiles>`, pointed at a
+directory other than `data/exposure` so it doesn't collide with the full
+national dataset) instead of the full national crawl above.
 
 ## Working in multiple worktrees
 

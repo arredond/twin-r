@@ -46,8 +46,16 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 DATA_DIR = os.environ.get("TWIN_R_DATA_DIR", "data")
 # Individually overridable (mirrors handler.py) -- needed once
 # buildings.parquet is a partitioned glob rather than a single file
-# (ADR-0005), which doesn't fit the single-DATA_DIR convention.
-BUILDINGS_PATH = os.environ.get("TWIN_R_BUILDINGS_PATH", f"{DATA_DIR}/exposure/buildings.parquet")
+# (ADR-0005), which doesn't fit the single-DATA_DIR convention. `data/
+# exposure` is now the one consolidated national dataset (Lorca-only/
+# region-scale subsets retired once the app worked at national scale).
+# buildings.parquet has no single combined file by design (region.py's
+# own docstring) -- always a `parts/*.buildings.parquet` glob.
+# exposure.parquet *does* have a single combined file
+# (`region.combine_exposure`), regenerated whenever the crawl changes.
+BUILDINGS_PATH = os.environ.get(
+    "TWIN_R_BUILDINGS_PATH", f"{DATA_DIR}/exposure/parts/*.buildings.parquet"
+)
 EXPOSURE_PATH = os.environ.get("TWIN_R_EXPOSURE_PATH", f"{DATA_DIR}/exposure/exposure.parquet")
 FRAGILITY_PATH = os.environ.get("TWIN_R_FRAGILITY_PATH", f"{DATA_DIR}/fragility/fragility.parquet")
 FAULTS_PATH = os.environ.get("TWIN_R_FAULTS_PATH", f"{DATA_DIR}/faults/qafi_faults.parquet")
