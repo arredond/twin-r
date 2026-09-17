@@ -1006,7 +1006,18 @@ export function DamageMap({
   // alone isn't the right bar.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    // Needed (unlike the buildings/debris feature-state effects above,
+    // which only ever call setFeatureState) because this effect also
+    // calls setFilter on MUNICIPALITIES_LAYER_ID -- that layer doesn't
+    // exist until the map's "load" handler runs addLayer, so without this
+    // guard a `results`/`municipalityStats` update landing before then
+    // (e.g. this effect's own first run, since mapRef.current is already
+    // set synchronously in the map-creation effect above, well before its
+    // async "load" event fires) subscribes to the next "sourcedata" event
+    // -- which can fire for the *basemap's own* sources first -- and
+    // throws "Cannot filter non-existing layer" when it does. Same guard
+    // the faults-filter effect below already uses for the same reason.
+    if (!map || !mapLoadedRef.current) return;
 
     const applyMunicipalityFeatureState = () => {
       const target = { source: MUNICIPALITIES_SOURCE_ID, sourceLayer: "municipalities" };
