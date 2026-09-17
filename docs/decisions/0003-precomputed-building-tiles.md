@@ -57,3 +57,22 @@ already committed to static files over S3 as the storage model.
   `docs/validation-region-expansion.md` §4 for the measurement and the
   next-step options (returning only non-"None" buildings is the obvious
   cheap one).
+- **A static PMTiles archive's own header maxzoom must be trustworthy, and
+  wasn't always.** `buildings.pmtiles` vanished above z14 in the frontend
+  after a `tile-join` merge (Ceuta/Melilla backfill) left its header
+  claiming `maxzoom: 15` when real geometry only went through z14
+  everywhere else — confirmed empty at z15 nationwide, not a regional gap.
+  Separately, MapLibre v6 changed its default overscale behavior
+  (`zoomLevelsToOverscale`) in a way that specifically breaks static
+  archives like this one past their declared maxzoom, independent of
+  whether that maxzoom is even correct. Fixed by patching the archive's
+  header byte directly (PMTiles stores `maxZoom`/`centerZoom` as raw
+  `uint8`s at fixed offsets — no retile needed for a metadata-only bug)
+  and by setting `zoomLevelsToOverscale` generously on the `Map`
+  constructor — see `[[twin-r-buildings-pmtiles-maxzoom-overscale]]` (the
+  session memory has the full mechanism and byte offsets). The same
+  investigation also surfaced that `buildings.pmtiles` currently reports
+  ~4.9x the expected national building count and has been through more
+  than one merge over its lifetime (`generator: tile-join`) — open,
+  unresolved, worth checking before trusting this archive's building_id
+  coverage for anything beyond what's been visually spot-checked.

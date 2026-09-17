@@ -142,7 +142,7 @@ function AutomaticForm({
           {!selectedFaultId && <option value="">Select a fault…</option>}
           {faults.map((f) => (
             <option key={f.fault_id} value={f.fault_id}>
-              {f.name} (Mmax {f.mmax.toFixed(1)}, {f.distance_km.toFixed(0)} km away)
+              {f.name} (Mmax {f.mmax.toFixed(1)})
             </option>
           ))}
         </select>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import type { GeoJSONSource, Map as MapLibreMap, MapLayerMouseEvent } from "maplibre-gl";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
@@ -49,21 +49,14 @@ const DEBRIS_PMTILES_URL = import.meta.env.VITE_DEBRIS_PMTILES_URL ?? "/data/deb
 const DEBRIS_SOURCE_ID = "debris";
 const DEBRIS_LAYER_ID = "debris-fill";
 const DEBRIS_OUTLINE_LAYER_ID = "debris-selected-outline";
-// Opacity falls off per ring (closest to the building is most opaque) to
-// hint at "denser near the façade."
-const DEBRIS_RING_OPACITY: maplibregl.ExpressionSpecification = [
-  "match",
-  ["get", "ring"],
-  1,
-  0.55,
-  2,
-  0.45,
-  3,
-  0.35,
-  4,
-  0.25,
-  0,
-];
+// One flat opacity for every shown ring -- a per-ring falloff (tried
+// first) made a single building's stacked rings 1..N read as concentric
+// bands of different shades rather than one debris field, and the same
+// partial alpha compounded further wherever neighboring buildings' rings
+// overlapped. A uniform, fully-opaque fill avoids both: rings from the
+// same building blend into each other (no visible seams) and an
+// overlapping neighbor's ring simply paints over rather than mixing.
+const DEBRIS_RING_OPACITY = 1;
 
 // Municipal boundaries (IGN/CNIG, see pipelines/exposure/src/exposure/
 // municipalities.py and DATA-SOURCES.md): a low-zoom choropleth of
@@ -403,6 +396,11 @@ export function DamageMap({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  // Debugging aid only (not tied to any rendering decision) -- lets
+  // whoever's poking at zoom-dependent behavior (BUILDING_DETAIL_MINZOOM,
+  // debris overzoom, tile density) read the current zoom off the map
+  // itself instead of guessing from feel.
+  const [zoom, setZoom] = useState<number | null>(null);
   const mapLoadedRef = useRef(false);
   const loadedBuildingIdsRef = useRef<Set<string>>(new Set());
   const loadedDebrisBuildingIdsRef = useRef<Set<string>>(new Set());
@@ -463,6 +461,32 @@ export function DamageMap({
       style: BASEMAP_STYLE,
       center: SPAIN_CENTER,
       zoom: SPAIN_ZOOM,
+      // MapLibre v6 defaults to "splitting" (requesting literal deeper-zoom
+      // tiles rather than immediately overscaling the last real one) for
+      // zoomLevelsToOverscale=4 levels below the map's own maxZoom --
+      // sensible for a live tile server that can generate detail beyond
+      // its advertised maxzoom, wrong for a static PMTiles archive with a
+      // real, hard ceiling (buildings.pmtiles: 15, debris.pmtiles: 16).
+      // Those "split" requests land past the archive's actual max zoom,
+      // and the pmtiles library returns a valid-but-empty MVT tile there
+      // rather than signaling "fall back to the parent" -- MapLibre then
+      // renders that empty tile as real content, so buildings/debris
+      // vanish right past their own maxzoom instead of continuing to
+      // overscale.
+      //
+      // The fix is NOT `0` (tried first, made it worse) -- per MapLibre's
+      // own formula, the "split" zone runs from a source's maxzoom up to
+      // `map.maxZoom - zoomLevelsToOverscale`, and only zoom levels above
+      // that split all the way to `map.maxZoom` overscale. `0` collapses
+      // the overscale zone to nothing and makes *every* zoom level past a
+      // source's maxzoom split (worse than the default-4 behavior this
+      // was meant to fix). To get "overscale immediately, no split zone
+      // at all" for both sources regardless of their own maxzoom, this
+      // needs to be >= `map.maxZoom - min(source maxzooms)` -- with the
+      // default map.maxZoom of 22 and our lowest source maxzoom (15),
+      // that's >= 7. Set generously past that so it holds even if a
+      // future layer's maxzoom is lower still.
+      zoomLevelsToOverscale: 22,
     });
     mapRef.current = map;
 
@@ -497,6 +521,26 @@ export function DamageMap({
         type: "vector",
         url: `pmtiles://${BUILDINGS_PMTILES_URL}`,
         promoteId: "building_id",
+        // Deliberately NOT overriding maxzoom here (contrast debris.pmtiles'
+        // source below, also unoverridden) -- MapLibre already reads it
+        // from the PMTiles header itself, and that's the right source of
+        // truth as long as the archive's own metadata is honest. It
+        // currently isn't: buildings.pmtiles' header claims maxzoom 15,
+        // but z15 is a uniformly empty ~27-byte tile everywhere checked
+        // (10 major cities nationwide, not a regional gap), and the
+        // file's own tilestats reports 63.2M buildings against an
+        // expected ~12.9M (ADR-0010) -- a ~4.9x inflation, generator
+        // "tile-join v2.79.0" rather than plain tippecanoe, pointing at a
+        // bad merge, not a simple zoom-guess quirk. A hardcoded
+        // maxzoom:14 override was tried here first and did paper over the
+        // symptom, but silently goes wrong again the moment this file is
+        // regenerated correctly (caps detail below whatever the fixed
+        // archive can actually support, with no error to catch it). The
+        // real fix belongs in the data (see twin-r-8a's
+        // fix-municipality-aggregation investigation into this same
+        // file's building_id mismatches) -- once buildings.pmtiles is
+        // regenerated with an honest header, this default (no override)
+        // is already correct with no frontend change needed.
       });
       map.addLayer({
         id: BUILDINGS_LAYER_ID,
@@ -542,23 +586,27 @@ export function DamageMap({
         minzoom: BUILDING_DETAIL_MINZOOM,
         paint: {
           "fill-color": DEBRIS_COLOR,
-          // Only the ring matching a building's *current* predicted damage
-          // state renders (ring 1 = Slight, ADR-0010) -- not every ring at
-          // or below it, which would stack e.g. both the slight and
-          // moderate rings for a Moderate-damage building. `<=` was tried
-          // first and produced exactly that stacking; `==` shows just the
-          // one ring that corresponds to the actual predicted state.
+          // Every ring up to a building's *current* predicted damage state
+          // renders (ring 1 = Slight .. ring 4 = Complete, ADR-0010): the
+          // rings are real nested annuli around the building, not
+          // alternative shapes, so a Moderate-damage building's debris
+          // genuinely covers both its Slight (1) and Moderate (2) rings,
+          // not just the outer one. An earlier `==`-only version (showing
+          // just the ring matching the exact damage state) was based on a
+          // mistaken read of the rings as concentric alternatives rather
+          // than an accumulating footprint -- see DEBRIS_RING_OPACITY's own
+          // comment for the other half of that fix (flat opacity, so
+          // stacking rings 1..N doesn't itself look banded).
           // ["feature-state", "damage_state_code"] is unset (null) for any
           // building no scenario has touched yet, so `coalesce` to -1
           // keeps every ring hidden by default rather than comparing
           // against null.
           "fill-opacity": [
             "case",
-            ["==", ["get", "ring"], ["coalesce", ["feature-state", "damage_state_code"], -1]],
+            ["<=", ["get", "ring"], ["coalesce", ["feature-state", "damage_state_code"], -1]],
             DEBRIS_RING_OPACITY,
             0,
           ],
-          "fill-outline-color": "#00000022",
         },
       });
       map.addLayer({
@@ -784,6 +832,10 @@ export function DamageMap({
       };
       map.on("moveend", reportCenter);
       reportCenter();
+
+      const reportZoom = () => setZoom(map.getZoom());
+      map.on("zoom", reportZoom);
+      reportZoom();
 
       mapLoadedRef.current = true;
     });
@@ -1013,5 +1065,27 @@ export function DamageMap({
     map.fitBounds(boundsFromRegion(evaluatedRegion), { padding: 48, maxZoom: 15, duration: 500 });
   }, [evaluatedRegion]);
 
-  return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
+  return (
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+      {zoom !== null && (
+        <div
+          style={{
+            position: "absolute",
+            top: "0.5rem",
+            right: "0.5rem",
+            padding: "0.15rem 0.4rem",
+            background: "rgba(0,0,0,0.6)",
+            color: "#fff",
+            fontSize: "0.75rem",
+            fontFamily: "monospace",
+            borderRadius: 4,
+            pointerEvents: "none",
+          }}
+        >
+          z{zoom.toFixed(2)}
+        </div>
+      )}
+    </div>
+  );
 }

@@ -58,11 +58,16 @@ export default function App() {
     ztorKm: 5,
   });
 
+  // Re-fetched whenever the map's center changes (moveend-driven, see
+  // DamageMap's onMapMove -- not per-frame) so the dropdown (RuptureForm.tsx)
+  // lists faults nearest-first relative to the current view instead of a
+  // fixed reference point. mapCenter starts at this same near-Madrid
+  // default, so the very first fetch already matches it.
   useEffect(() => {
-    listFaults()
+    listFaults(mapCenter.lat, mapCenter.lon)
       .then(setFaults)
       .catch((e) => setFaultsError(e instanceof Error ? e.message : String(e)));
-  }, []);
+  }, [mapCenter]);
 
   async function runScenario(run: () => Promise<ScenarioResult>) {
     setIsRunning(true);

@@ -162,8 +162,23 @@ export function runFaultScenario(
 // a leftover from when the app defaulted to a Lorca-centered view and
 // silently produced zero results once the default reference point moved
 // away from any nearby fault (found: 0 faults within 150km of Madrid).
-export async function listFaults(radiusKm = 3000): Promise<Fault[]> {
-  const resp = await fetch(`${API_URL}/faults?radius_km=${radiusKm}`);
+//
+// nearLat/nearLon: same "distance from the user's actual point of
+// interest, never a fixed default" rule as runFaultScenario above -- it's
+// what orders the returned list nearest-first (RuptureForm.tsx's dropdown
+// doesn't display the distance itself, just benefits from the ordering).
+// Omitting these previously left the backend's own Madrid default in
+// place regardless of where the map was actually centered, so every
+// session's dropdown was quietly ordered around Madrid no matter what the
+// user was looking at -- always pass the caller's current map center.
+export async function listFaults(
+  nearLat: number,
+  nearLon: number,
+  radiusKm = 3000
+): Promise<Fault[]> {
+  const resp = await fetch(
+    `${API_URL}/faults?lat=${nearLat}&lon=${nearLon}&radius_km=${radiusKm}`
+  );
   if (!resp.ok) {
     const detail = await resp.text();
     throw new Error(`faults request failed (${resp.status}): ${detail}`);
