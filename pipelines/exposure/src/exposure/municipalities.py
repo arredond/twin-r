@@ -111,6 +111,27 @@ def load_municipalities(gml_path: str | Path) -> gpd.GeoDataFrame:
     ).reset_index(drop=True)
 
 
+# Catastro's ATOM feed doesn't always file a municipality under its real
+# INE code (catastro.py's own docstring flags Madrid: filed as 28900, not
+# INE 28079). Ceuta and Melilla are a confirmed case of this -- Catastro
+# lists them as "territorial offices" 55/56 (verified directly against the
+# live root feed), not their real INE province codes 51/52, so their
+# buildings parts are named `55101.buildings.parquet`/
+# `56101.buildings.parquet`, not `51001`/`52001` like IGN's boundary layer
+# (this module's own `ine_code`) expects. A handful of ordinary
+# municipalities also land under Catastro's own reused "51"/"52" codes as
+# an unrelated overflow bucket (e.g. Cartagena, Gijón) -- not fixed here,
+# out of scope for this mapping (they're merely missing counts, not
+# missing from the map the way Ceuta/Melilla's buildings originally were).
+# Mapping only these two specific, confirmed, non-INE Catastro codes to
+# their real INE codes -- not a general Catastro-code-to-INE translator,
+# which would need an authoritative source this pipeline doesn't have.
+_CATASTRO_CODE_TO_INE = {
+    "55101": "51001",  # Ceuta
+    "56101": "52001",  # Melilla
+}
+
+
 def attach_building_counts(
     municipalities: gpd.GeoDataFrame, parts_dir: str | Path
 ) -> gpd.GeoDataFrame:
@@ -128,6 +149,7 @@ def attach_building_counts(
     counts: dict[str, int] = {}
     for part_path in parts_dir.glob("*.buildings.parquet"):
         ine_code = part_path.name.split(".", 1)[0]
+        ine_code = _CATASTRO_CODE_TO_INE.get(ine_code, ine_code)
         counts[ine_code] = len(pd.read_parquet(part_path, columns=["building_id"]))
 
     result = municipalities.copy()

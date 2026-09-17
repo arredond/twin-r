@@ -195,8 +195,9 @@ present) rather than keeping a single top-level script.
    → `exposure.parquet` → `buildings.pmtiles`, for Lorca municipality.
    Verified end-to-end against live Catastro data: 27,884 buildings.
 4. **Fragility import** ✅: Martins & Silva (2020) subset (`CR_LDUAL-DUL` and
-   `MR_LWAL-DUL`, H1–H12) → `fragility.parquet`. Verified against the live
-   GitHub repo: 3,400 rows across 17 taxonomy/height classes.
+   `MR_LWAL-DUL`, H1–H12, plus `MUR-STRUB_LWAL-DNO` vernacular masonry added
+   per ADR-0012, H1–H5) → `fragility.parquet`. Verified against the live
+   GitHub repo: 4,400 rows across 22 taxonomy/height classes.
 5. **Scenario function v0** ✅: manual-rupture input, Akkar 2014 GMPE (via
    `openquake.hazardlib`, flat reference-rock Vs30, point-source Rjb
    approximation), fragility evaluation, thin GeoParquet/JSON output. Runs

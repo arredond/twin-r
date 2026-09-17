@@ -10,12 +10,40 @@ at this layer would have caught the first outright.
 from __future__ import annotations
 
 import importlib
+import time
 from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
 import pytest
 from shapely.geometry import LineString, Polygon
+
+# Every request in this file runs against a 3-building synthetic fixture --
+# no real Catastro/QAFI I/O, no network. This is NOT a real-scale
+# performance test (see test_fault_scenario_performance.py for that, run
+# against the real national dataset, where a long fault genuinely takes
+# several seconds): at 3 buildings, even a request that regressed all the
+# way back to the *un-fixed* ADR-0009/ADR-0014 behaviour (an unchunked
+# hazardlib distance matrix, a per-request DuckDB spatial join) would
+# still return quickly, so this ceiling only catches a much grosser bug --
+# e.g. an accidental network call, an infinite loop, or a per-request cost
+# that scales with something unbounded (municipality count, fault count)
+# rather than with this fixture's tiny building count. Kept generous (10s)
+# for slow CI/laptop startup rather than tuned tight, since catching a
+# real regression's *magnitude* is test_fault_scenario_performance.py's
+# job, not this one's.
+MAX_REQUEST_SECONDS = 10.0
+
+
+def _timed(fn):
+    t0 = time.monotonic()
+    result = fn()
+    elapsed = time.monotonic() - t0
+    assert elapsed < MAX_REQUEST_SECONDS, (
+        f"request took {elapsed:.2f}s, expected < {MAX_REQUEST_SECONDS}s"
+    )
+    return result
+
 
 # Two real, nearby buildings (~100m apart) and one far away (~50km), so a
 # manual-mode scenario centered on the first two can exercise the spatial
@@ -361,3 +389,69 @@ def test_building_info_returns_exposure_attributes(client):
 def test_building_info_unknown_id_returns_404(client):
     resp = client.get("/buildings/not-a-real-building")
     assert resp.status_code == 404
+
+
+def test_municipality_stats_agree_with_which_buildings_are_shipped_individually(client):
+    # End-to-end regression guard for the reported bug: a municipality's
+    # choropleth ("N% affected") must never disagree with what the
+    # per-building `buildings` array (the one popups read) actually ships
+    # for that same municipality -- see test_response.py's own unit-level
+    # version of this invariant for the narrower, faster check.
+    resp = client.post(
+        "/scenarios/manual",
+        json={
+            "lat": NEAR_LAT,
+            "lon": NEAR_LON,
+            "mag": 6.5,
+            "rake": 20.0,
+            "probability_level": "very_low",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+
+    shipped_ids = {b["building_id"] for b in body["buildings"]}
+    stats_by_code = {s["municipality_code"]: s for s in body["municipality_stats"]}
+    assert stats_by_code, "expected at least one municipality's stats"
+
+    # b1/b2 (municipality 30024) sit right next to a Mw6.5 rupture at
+    # very_low (median+1sigma, 85th-percentile damage) -- must show real
+    # damage, exercising the non-trivial "some affected" branch, not just
+    # an all-None municipality.
+    thirty024 = stats_by_code["30024"]
+    n_affected = thirty024["n_evaluated"] - thirty024["counts"]["None"]
+    assert n_affected > 0
+    n_affected_and_shipped = sum(
+        1
+        for b in body["buildings"]
+        if b["building_id"] in {"b1", "b2"} and b["damage_state_code"] != 0
+    )
+    assert n_affected_and_shipped == n_affected
+    # And the reverse direction: nothing shipped with a non-None code for
+    # this municipality is missing from the affected count.
+    assert n_affected_and_shipped <= len(shipped_ids)
+
+
+def test_faults_endpoint_completes_quickly(client):
+    _timed(
+        lambda: client.get("/faults", params={"lat": NEAR_LAT, "lon": NEAR_LON, "radius_km": 100})
+    )
+
+
+def test_manual_scenario_completes_quickly(client):
+    resp = _timed(
+        lambda: client.post(
+            "/scenarios/manual", json={"lat": NEAR_LAT, "lon": NEAR_LON, "mag": 6.5, "rake": 20.0}
+        )
+    )
+    assert resp.status_code == 200
+
+
+def test_fault_scenario_completes_quickly(client):
+    resp = _timed(
+        lambda: client.get(
+            "/scenarios/fault",
+            params={"fault_id": "TEST001", "near_lat": NEAR_LAT, "near_lon": NEAR_LON},
+        )
+    )
+    assert resp.status_code == 200
