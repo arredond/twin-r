@@ -2065,16 +2065,20 @@ name = "twin-r-exposure"
 version = "0.1.0"
 source = { editable = "pipelines/exposure" }
 dependencies = [
+    { name = "duckdb" },
     { name = "geopandas" },
     { name = "pyarrow" },
+    { name = "pyproj" },
     { name = "requests" },
     { name = "shapely" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "duckdb", specifier = ">=1.1" },
     { name = "geopandas", specifier = ">=1.0" },
     { name = "pyarrow", specifier = ">=17.0" },
+    { name = "pyproj", specifier = ">=3.6" },
     { name = "requests", specifier = ">=2.32" },
     { name = "shapely", specifier = ">=2.0" },
 ]

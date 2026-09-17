@@ -119,6 +119,15 @@ def test_municipality_stats_stay_consistent_with_shipped_buildings_at_national_s
     # real long-fault run over the real national dataset -- this is the
     # scale (millions of evaluated buildings, hundreds of thousands
     # affected) the reported bug actually showed up at.
+    #
+    # Doesn't hardcode which municipality ends up "affected" -- that
+    # depends on the correctness of municipality_code itself (the exact
+    # thing a real regression here would break), so asserting it for one
+    # specific code would just start failing again the next time a
+    # municipality-code fix legitimately changes who's near the fault
+    # (as happened when the Catastro/INE code-mismatch fix moved
+    # Villalpando's real buildings out from under a neighbour's damage,
+    # see docs/decisions and this module's own git history).
     from scenario.response import compute_municipality_stats, prepare_response_buildings
 
     result, _ = _run_fault(
@@ -128,13 +137,15 @@ def test_municipality_stats_stay_consistent_with_shipped_buildings_at_national_s
     shipped = prepare_response_buildings(result)
     shipped_ids = set(shipped["building_id"])
 
-    villalpando = next(s for s in stats if s["municipality_code"] == "49250")
-    n_affected = villalpando["n_evaluated"] - villalpando["counts"]["None"]
-    assert n_affected > 0
+    affected_codes = [
+        s["municipality_code"] for s in stats if s["n_evaluated"] - s["counts"]["None"] > 0
+    ]
+    assert affected_codes, "expected at least one municipality with real damage for this fault"
 
-    villalpando_rows = result[result["municipality_code"] == "49250"]
-    n_affected_and_shipped = (
-        (villalpando_rows["damage_state"] != "None")
-        & villalpando_rows["building_id"].isin(shipped_ids)
-    ).sum()
-    assert n_affected_and_shipped == n_affected
+    for code in affected_codes:
+        muni_rows = result[result["municipality_code"] == code]
+        n_affected = (muni_rows["damage_state"] != "None").sum()
+        n_affected_and_shipped = (
+            (muni_rows["damage_state"] != "None") & muni_rows["building_id"].isin(shipped_ids)
+        ).sum()
+        assert n_affected_and_shipped == n_affected, f"mismatch for municipality {code}"
