@@ -34,12 +34,15 @@ Already-crawled data needs a one-time backfill:
 `exposure.backfill --municipality-code <glob>` derives the code from
 each part's `<ine_code>.buildings.parquet` filename (no spatial
 computation, same "backfill in place" pattern as ADR-0006's spatial-index
-columns). Run and verified against all three datasets on this machine
-(`data/exposure` -- Lorca, 27,884 buildings; `data/exposure_region` --
-819 parts, 2,774,819 buildings, 16s; `data/exposure_spain` -- 7,764
-parts, 12,881,817 buildings, ~168s). A merged, non-partitioned
-`buildings.parquet` (no `<ine_code>.` prefix) isn't backfillable this way
-and needs regenerating via the pipeline instead.
+columns). Run and verified against all three datasets on this machine at
+the time (the Lorca-only and Murcia+Andalucía-only ones have since been
+retired, and the third -- then `data/exposure_spain`, since renamed to
+the sole `data/exposure` -- is the one that remains): the Lorca dataset,
+27,884 buildings; the Murcia+Andalucía region dataset, 819 parts,
+2,774,819 buildings, 16s; the national dataset, 7,764 parts, 12,881,817
+buildings, ~168s. A merged, non-partitioned `buildings.parquet` (no
+`<ine_code>.` prefix) isn't backfillable this way and needs regenerating
+via the pipeline instead.
 
 ## Alternatives considered
 

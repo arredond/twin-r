@@ -140,10 +140,15 @@ def data_dir(tmp_path: Path) -> Path:
     )
 
     d = tmp_path / "data"
-    (d / "exposure").mkdir(parents=True)
+    (d / "exposure" / "parts").mkdir(parents=True)
     (d / "fragility").mkdir(parents=True)
     (d / "faults").mkdir(parents=True)
-    buildings.to_parquet(d / "exposure" / "buildings.parquet")
+    # buildings.parquet is always a partitioned glob in production (no
+    # single combined file, by design -- region.py) -- one file here is
+    # enough to satisfy local.py's glob default without needing a real
+    # per-municipality split for a synthetic fixture. exposure.parquet
+    # *is* a single combined file in production, matched here directly.
+    buildings.to_parquet(d / "exposure" / "parts" / "test.buildings.parquet")
     exposure.to_parquet(d / "exposure" / "exposure.parquet", index=False)
     fragility.to_parquet(d / "fragility" / "fragility.parquet", index=False)
     faults.to_parquet(d / "faults" / "qafi_faults.parquet")

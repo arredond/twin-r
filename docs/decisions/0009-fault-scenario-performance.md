@@ -5,7 +5,7 @@ Status: accepted
 ## Context
 
 Running the Barcelona fault (ME025) against the nationwide dataset
-(`data/exposure_spain`, ~12.4M buildings) took ~7.2s server-side and shipped
+(`data/exposure`, ~12.4M buildings) took ~7.2s server-side and shipped
 a 63MB JSON response. Peñacova-Régua-Verín (PO011) -- a much longer fault,
 entirely in Portugal, a different country this pipeline has never crawled
 and has **zero** exposure data for (unrelated to the Basque Country/Navarra
@@ -124,7 +124,7 @@ now instead of the POST body shape.
   (e.g. a Vs30/soil-class layer, docs/milestone-1-plan.md §2) needs
   finer-than-1km spatial resolution; `SA_GRID_CELL_KM` would need
   revisiting alongside it.
-- Measured end-to-end improvement (nationwide dataset, `data/exposure_spain`):
+- Measured end-to-end improvement (nationwide dataset, `data/exposure`):
 
   | | Before this ADR | After |
   |---|---|---|
