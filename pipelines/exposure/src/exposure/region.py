@@ -79,6 +79,21 @@ MURCIA_ANDALUCIA_PROVINCES = {
 # combine_exposure/tile_region below pick their output up automatically
 # without caring which crawl produced it.
 #
+# Catastro splits its INSPIRE Buildings ATOM feed by its own territorial
+# "delegación" (office), not strictly by INE province -- most provinces
+# have exactly one delegación with a matching number, but several have a
+# *second* delegación, numbered outside the normal 01-52 province range,
+# covering a subset of that same province's municipalities. Missing one
+# of these numbers from this dict doesn't error or warn anywhere -- the
+# affected municipalities just never appear in any feed this pipeline
+# queries, silently absent from the crawl (confirmed this session: Jerez
+# de la Frontera, one of Cádiz's larger cities, plus 7 others, filed only
+# under delegación 53, not under Cádiz's own 11; Vigo plus 3 others only
+# under 54, not Pontevedra's own 36 -- both delegaciones missing from an
+# earlier version of this dict, so those 12 municipalities were absent
+# from the national dataset entirely until backfilled by hand once
+# noticed, see docs/decisions).
+#
 # Ceuta/Melilla are codes **55**/**56** here, not their real INE province
 # codes 51/52 -- confirmed directly against the live root feed, which
 # labels them "Territorial office 55 Ceuta"/"Territorial office 56
@@ -89,6 +104,11 @@ MURCIA_ANDALUCIA_PROVINCES = {
 # national dataset until backfilled by hand (DATA-SOURCES.md has the full
 # note, including the `_CATASTRO_CODE_TO_INE` remap this caused downstream
 # in services/scenario/response.py and this package's municipalities.py).
+#
+# None of these overflow delegación numbers (51/52/53/54/55/56) are the
+# real INE code for the municipalities filed under them -- every one of
+# them needs `municipality_crosswalk.py`'s correction after crawling, the
+# same as every "ordinary" mismatched municipality does.
 SPAIN_PROVINCES = {
     code: code
     for code in [
@@ -140,6 +160,8 @@ SPAIN_PROVINCES = {
         "50",
         "51",
         "52",
+        "53",
+        "54",
         "55",
         "56",
     ]

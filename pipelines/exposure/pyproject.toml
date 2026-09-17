@@ -8,6 +8,8 @@ dependencies = [
     "geopandas>=1.0",
     "pyarrow>=17.0",
     "shapely>=2.0",
+    "pyproj>=3.6",
+    "duckdb>=1.1",
 ]
 
 [build-system]
