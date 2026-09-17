@@ -12,9 +12,9 @@ to a multi-minute hang and a 10-20s-per-request join respectively) run at
 real scale, with a ceiling generous enough to absorb CI/laptop variance but
 tight enough to catch a real regression back into that territory.
 
-Skipped wherever the national dataset (`data/exposure_spain`) hasn't been
+Skipped wherever the national dataset (`data/exposure`) hasn't been
 crawled locally -- same "local sanity check, not a CI requirement" pattern
-as test_engine_integration.py's smaller Lorca-only version.
+as test_engine_integration.py's own smaller/faster version.
 """
 
 from __future__ import annotations
@@ -32,12 +32,12 @@ from scenario.rupture import from_fault
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 FAULTS = DATA_DIR / "faults" / "qafi_faults.parquet"
 FRAGILITY = DATA_DIR / "fragility" / "fragility.parquet"
-NATIONAL_PARTS = DATA_DIR / "exposure_spain" / "parts"
+NATIONAL_PARTS = DATA_DIR / "exposure" / "parts"
 BUILDINGS_GLOB = str(NATIONAL_PARTS / "*.buildings.parquet")
-EXPOSURE_GLOB = str(NATIONAL_PARTS / "*.exposure.parquet")
+EXPOSURE = DATA_DIR / "exposure" / "exposure.parquet"
 
 pytestmark = pytest.mark.skipif(
-    not (FAULTS.exists() and FRAGILITY.exists() and NATIONAL_PARTS.is_dir()),
+    not (FAULTS.exists() and FRAGILITY.exists() and NATIONAL_PARTS.is_dir() and EXPOSURE.exists()),
     reason="run pipelines/exposure.region_cli --spain (or --basque-navarra) locally first",
 )
 
@@ -78,7 +78,7 @@ def _run_fault(fault_id: str, near_lat: float, near_lon: float, probability_leve
     result = run_scenario(
         rupture,
         BUILDINGS_GLOB,
-        EXPOSURE_GLOB,
+        str(EXPOSURE),
         str(FRAGILITY),
         max_distance_km=radius_km,
         sigma_multiplier=params.sigma_multiplier,

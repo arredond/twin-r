@@ -14,14 +14,17 @@ set -euo pipefail
 SESSION="twinr"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Defaults to the current widest-coverage dataset (see README's Quickstart
-# for how it's built). Override for a smaller/faster local dataset, e.g.
-# the single-municipality Lorca one from milestone 1:
-#   TWIN_R_BUILDINGS_PATH="data/exposure/buildings.parquet" \
-#   TWIN_R_EXPOSURE_PATH="data/exposure/exposure.parquet" \
+# Defaults to the national dataset (see README's Quickstart for how it's
+# built). buildings.parquet is always a per-municipality partitioned glob
+# (no single combined file exists, by design -- region.py); exposure.parquet
+# is a single combined file (region.combine_exposure), regenerated whenever
+# the crawl changes. Override for a smaller/faster local dataset, e.g. a
+# single-municipality test crawl:
+#   TWIN_R_BUILDINGS_PATH="data/test-municipality/parts/*.buildings.parquet" \
+#   TWIN_R_EXPOSURE_PATH="data/test-municipality/exposure.parquet" \
 #   twinr start
-: "${TWIN_R_BUILDINGS_PATH:=data/exposure_spain/parts/*.buildings.parquet}"
-: "${TWIN_R_EXPOSURE_PATH:=data/exposure_spain/exposure.parquet}"
+: "${TWIN_R_BUILDINGS_PATH:=data/exposure/parts/*.buildings.parquet}"
+: "${TWIN_R_EXPOSURE_PATH:=data/exposure/exposure.parquet}"
 
 API_CMD="cd '$REPO_ROOT' && TWIN_R_BUILDINGS_PATH='$TWIN_R_BUILDINGS_PATH' TWIN_R_EXPOSURE_PATH='$TWIN_R_EXPOSURE_PATH' uv run --package twin-r-scenario uvicorn scenario.local:app --port 8000 --reload"
 WEB_CMD="cd '$REPO_ROOT/apps/web' && npm run dev -- --port 5173"

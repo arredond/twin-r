@@ -25,7 +25,9 @@ from .probability_level import resolve_probability_level
 from .response import compute_municipality_stats, prepare_response_buildings
 from .rupture import Rupture, from_fault, from_manual_input
 
-BUILDINGS_PATH = os.environ.get("TWIN_R_BUILDINGS_PATH", "data/exposure/buildings.parquet")
+# buildings.parquet is a partitioned glob, not a single combined file --
+# see local.py's own comment on this same pair of defaults for why.
+BUILDINGS_PATH = os.environ.get("TWIN_R_BUILDINGS_PATH", "data/exposure/parts/*.buildings.parquet")
 EXPOSURE_PATH = os.environ.get("TWIN_R_EXPOSURE_PATH", "data/exposure/exposure.parquet")
 FRAGILITY_PATH = os.environ.get("TWIN_R_FRAGILITY_PATH", "data/fragility/fragility.parquet")
 FAULTS_PATH = os.environ.get("TWIN_R_FAULTS_PATH", "data/faults/qafi_faults.parquet")

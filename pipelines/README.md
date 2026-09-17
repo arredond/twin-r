@@ -51,33 +51,37 @@ footprints/floors/construction year, assigns a taxonomy class heuristically
 (no field survey -- see `taxonomy.py`'s docstring for the method and its
 limits), and writes `buildings.parquet` + `exposure.parquet` (+ PMTiles if
 requested). Good for local iteration on parsing/taxonomy logic without
-waiting on a multi-hour crawl.
+waiting on a multi-hour crawl -- point it at a directory other than
+`data/exposure` (the full national dataset, see below) so the two don't
+collide.
 
 ```bash
-uv run python -m exposure data/exposure/raw/lorca data/exposure/buildings.parquet \
-    data/exposure/exposure.parquet data/exposure/buildings.pmtiles
+uv run python -m exposure data/exposure-test/raw/lorca data/exposure-test/buildings.parquet \
+    data/exposure-test/exposure.parquet data/exposure-test/buildings.pmtiles
 ```
 
-**Region crawl** (`exposure.region_cli`) -- the same pipeline, run across
-every municipality in a set of provinces, concurrently (default 8 workers),
-resumable (skips municipalities whose output already exists), and disk-
-conscious (deletes each municipality's raw GML immediately after parsing).
-See [ADR-0005](../docs/decisions/0005-region-scale-crawling.md).
+**Region/national crawl** (`exposure.region_cli`) -- the same pipeline, run
+across every municipality in a set of provinces, concurrently (default 8
+workers), resumable (skips municipalities whose output already exists),
+and disk-conscious (deletes each municipality's raw GML immediately after
+parsing). See [ADR-0005](../docs/decisions/0005-region-scale-crawling.md).
+`--spain` covers every province reachable through Catastro's national
+feed (48 provinces -- excludes the Basque Country and Navarra, which run
+separate Foral cadastral systems); `--basque-navarra` covers those
+separately, on top of `--spain` or alone. `data/exposure` is the one
+consolidated dataset the rest of the app expects -- there's no ongoing
+reason to crawl a smaller subset (e.g. just Murcia + Andalucía) into its
+own directory once you have this.
 
 ```bash
-# Murcia + Andalucía (9 provinces)
-uv run python -m exposure.region_cli data/exposure_region/raw data/exposure_region/parts \
-    data/exposure_region/exposure.parquet data/exposure_region/buildings.pmtiles
-
-# All of Spain reachable via this pipeline (48 provinces -- excludes the
-# Basque Country and Navarra, which run separate cadastral systems)
-uv run python -m exposure.region_cli data/exposure_spain/raw data/exposure_spain/parts \
-    data/exposure_spain/exposure.parquet data/exposure_spain/buildings.pmtiles --spain
+uv run python -m exposure.region_cli data/exposure/raw data/exposure/parts \
+    data/exposure/exposure.parquet data/exposure/buildings.pmtiles \
+    --spain --basque-navarra
 ```
 
-Key design point: `buildings.parquet` from a region crawl is **partitioned**
-(one file per municipality under `parts/`), never combined into a single
-file -- `services/scenario` reads it via a glob pattern
+Key design point: `buildings.parquet` from a region/national crawl is
+**partitioned** (one file per municipality under `parts/`), never combined
+into a single file -- `services/scenario` reads it via a glob pattern
 (`parts/*.buildings.parquet`), and DuckDB's parquet reader uses each part's
 column statistics to skip files that can't match a query's spatial filter
 (see [ADR-0006](../docs/decisions/0006-precomputed-spatial-columns-and-adaptive-radius.md)).
@@ -89,7 +93,7 @@ columns existed, `exposure.backfill` retrofits them in place without
 re-downloading:
 
 ```bash
-uv run python -m exposure.backfill "data/exposure_region/parts/*.buildings.parquet"
+uv run python -m exposure.backfill "data/exposure/parts/*.buildings.parquet"
 ```
 
 ### Municipal boundaries (`exposure.municipalities_cli`)
@@ -106,7 +110,7 @@ region/province choice (always one national download); run it after an
 `parts_dir`.
 
 ```bash
-uv run python -m exposure.municipalities_cli data/exposure/muni_raw data/exposure_region/parts \
+uv run python -m exposure.municipalities_cli data/exposure/muni_raw data/exposure/parts \
     data/exposure/municipalities.pmtiles data/exposure/municipalities.parquet
 ```
 
