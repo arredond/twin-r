@@ -51,9 +51,6 @@ BUILDINGS_PATH = os.environ.get("TWIN_R_BUILDINGS_PATH", f"{DATA_DIR}/exposure/b
 EXPOSURE_PATH = os.environ.get("TWIN_R_EXPOSURE_PATH", f"{DATA_DIR}/exposure/exposure.parquet")
 FRAGILITY_PATH = os.environ.get("TWIN_R_FRAGILITY_PATH", f"{DATA_DIR}/fragility/fragility.parquet")
 FAULTS_PATH = os.environ.get("TWIN_R_FAULTS_PATH", f"{DATA_DIR}/faults/qafi_faults.parquet")
-MUNICIPALITIES_PATH = os.environ.get(
-    "TWIN_R_MUNICIPALITIES_PATH", f"{DATA_DIR}/exposure/municipalities.parquet"
-)
 
 # Default reference point when a caller doesn't specify one -- Madrid, as
 # an arbitrary central point, not because it's seismically special. Any
@@ -111,7 +108,7 @@ def _run_and_serialize(rupture: Rupture, probability_level: str) -> dict:
         # Aggregated from the *full* result (before it's trimmed below) --
         # see compute_municipality_stats's own docstring for why this needs
         # lon/lat, which the thin payload deliberately drops.
-        municipality_stats = compute_municipality_stats(result, MUNICIPALITIES_PATH)
+        municipality_stats = compute_municipality_stats(result)
         # Filters to damaged/uncertain buildings and trims to the thin
         # frontend-facing payload (see response.py's docstring for why
         # lon/lat/im_value/im_type are dropped and damage_state becomes an

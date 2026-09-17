@@ -16,7 +16,6 @@ noticeably shrinks a payload that can otherwise run into the tens of MB.
 
 from __future__ import annotations
 
-import duckdb
 import pandas as pd
 
 from .damage import DAMAGE_STATES
@@ -54,67 +53,42 @@ def prepare_response_buildings(result: pd.DataFrame) -> pd.DataFrame:
     return result[_THIN_COLUMNS]
 
 
-def compute_municipality_stats(result: pd.DataFrame, municipalities_path: str) -> list[dict]:
+def compute_municipality_stats(result: pd.DataFrame) -> list[dict]:
     """Aggregate engine.py's *full* per-building result (every evaluated
     building, before `prepare_response_buildings` trims it down) into
     per-municipality damage-state counts, for the map's low-zoom
     choropleth (apps/web/src/components/DamageMap.tsx).
 
-    Deliberately computed server-side rather than joined client-side: the
-    frontend's thin per-building payload never carries lon/lat (this
-    module's own docstring explains why), and buildings.pmtiles carries no
-    municipality attribute either -- but `result` here already has
-    `lon`/`lat` (engine.py's `run_scenario` docstring), and a spatial join
-    against `municipalities_path` (a small GeoParquet of ~8,200 municipal
-    boundary polygons, pipelines/exposure/src/exposure/municipalities.py)
-    is cheap for however many buildings one scenario evaluates -- no need
-    to precompute/store a municipality_code on every one of the millions
-    of rows in buildings.parquet just for this.
+    A plain groupby on `result`'s `municipality_code` column -- pipelines/
+    exposure now stamps that column onto every building at ingest time
+    (`pipeline.build_exposure`), from the same INE/Foral code that already
+    names its `<ine_code>.buildings.parquet` part (region.py), so engine.py
+    carries it straight through for free.
 
-    Uses DuckDB's spatial extension (`ST_Contains`) rather than adding a
-    geopandas/shapely dependency to this service -- this service already
-    leans on DuckDB for engine.py's own spatial pre-filter, and DuckDB
-    reads GeoParquet's geometry column natively once the extension is
-    loaded (verified this session: no separate WKB parsing needed).
-
-    Unlike buildings/exposure/fragility, a missing `municipalities_path`
-    doesn't fail the whole scenario -- it's a newer, separately-produced
-    dataset (municipalities.py) that an existing dev/test setup may not
-    have yet, and the choropleth is additive: falling back to `[]` just
-    means the frontend keeps showing individual buildings at every zoom,
-    not a broken scenario run.
+    This used to be a DuckDB `ST_Contains` spatial join against a ~8,200-
+    polygon municipalities GeoParquet, done fresh on every scenario request
+    -- correct, but it scales with (buildings evaluated x municipality
+    count), which made it the dominant cost of `/scenarios/fault` once
+    long/nationwide faults routinely evaluate millions of buildings
+    (measured: ~7s of the request at 3M evaluated buildings, see
+    docs/decisions -- the regression from ~1-2s to ~10-20s per request
+    that motivated this rewrite). Point-in-polygon membership doesn't
+    change between requests, so doing it once per building at pipeline
+    time instead of once per request removes that cost entirely, and drops
+    the per-request dependency on municipalities.parquet/DuckDB's spatial
+    extension for this endpoint altogether.
     """
     if result.empty:
         return []
 
-    con = duckdb.connect()
-    if municipalities_path.startswith("s3://"):
-        con.execute("INSTALL httpfs; LOAD httpfs;")
-    con.execute("INSTALL spatial; LOAD spatial;")
-    con.register("result_df", result[["lon", "lat", "damage_state"]])
-    try:
-        counts = con.execute(
-            """
-            SELECT m.ine_code, r.damage_state, COUNT(*) AS n
-            FROM result_df AS r
-            JOIN read_parquet(?) AS m ON ST_Contains(m.geometry, ST_Point(r.lon, r.lat))
-            GROUP BY m.ine_code, r.damage_state
-            """,
-            [municipalities_path],
-        ).df()
-    except duckdb.IOException:
-        return []
-    if counts.empty:
-        return []
-
     stats = []
-    for ine_code, group in counts.groupby("ine_code"):
-        state_counts = dict(zip(group["damage_state"], group["n"].astype(int)))
+    for code, group in result.groupby("municipality_code"):
+        state_counts = group["damage_state"].value_counts()
         stats.append(
             {
-                "municipality_code": ine_code,
-                "n_evaluated": int(group["n"].sum()),
-                "counts": {state: state_counts.get(state, 0) for state in DAMAGE_STATES},
+                "municipality_code": code,
+                "n_evaluated": len(group),
+                "counts": {state: int(state_counts.get(state, 0)) for state in DAMAGE_STATES},
             }
         )
     return stats

@@ -16,7 +16,7 @@ from .tile import tile_buildings, tile_debris
 
 
 def build_exposure(
-    buildings: gpd.GeoDataFrame, municipality_name: str
+    buildings: gpd.GeoDataFrame, municipality_name: str, municipality_code: str
 ) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
     """Taxonomy-assign an already-loaded municipality's buildings.
 
@@ -26,9 +26,19 @@ def build_exposure(
     share this half without going through Catastro's download/parse at
     all. Returns (buildings, exposure), same contract as
     `process_municipality`.
+
+    `municipality_code` (the same INE/Foral code region.py already uses to
+    name this municipality's `<ine_code>.buildings.parquet` part) is stamped
+    onto every building as a plain column here -- every caller already knows
+    it for free (it's how the part gets named), so this costs nothing to
+    populate and lets the scenario engine group buildings by municipality
+    with a column read instead of a per-request spatial join against
+    municipalities.parquet (see scenario/response.py's
+    `compute_municipality_stats`).
     """
     buildings = buildings.copy()
     buildings["municipality"] = municipality_name
+    buildings["municipality_code"] = municipality_code
 
     # Zipping the two columns directly (rather than `buildings.apply(...,
     # axis=1)`) avoids per-row-apply's untyped-tuple-return ambiguity for
@@ -64,7 +74,7 @@ def process_municipality(
         download_buildings(municipality, raw_dir)
 
     buildings = load_buildings(raw_dir)
-    return build_exposure(buildings, municipality.name)
+    return build_exposure(buildings, municipality.name, municipality.ine_code)
 
 
 def run(
