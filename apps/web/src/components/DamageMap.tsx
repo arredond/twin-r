@@ -88,17 +88,26 @@ const MUNICIPALITIES_LAYER_ID = "municipalities-fill";
 // "roughly city-district scale."
 const BUILDING_DETAIL_MINZOOM = 11;
 
-// Sequential ramp on "fraction of this municipality's buildings affected"
-// (i.e. not confidently None) -- None's own green through Complete's dark
-// red, reusing DAMAGE_COLORS rather than a separate palette so the
-// choropleth and the building/legend colors read as one system.
+// Interpolated over `mean_severity` (the evaluated buildings' damage_state_code
+// average, 0=all None .. 4=all Complete -- see its own feature-state comment
+// below) through the *same* 5 DAMAGE_COLORS stops/order a single building's
+// fill color is chosen from, not a separate 2-stop green->red gradient --
+// so a municipality painted, say, "mostly orange" reads as "mostly Extensive"
+// the same way an individual building painted orange does, rather than the
+// two scales implying different severities for the same color.
 const MUNICIPALITY_FILL_COLOR: maplibregl.ExpressionSpecification = [
   "interpolate",
   ["linear"],
-  ["/", ["coalesce", ["feature-state", "n_affected"], 0], ["max", ["get", "n_buildings"], 1]],
+  ["coalesce", ["feature-state", "mean_severity"], 0],
   0,
   DAMAGE_COLORS.None,
   1,
+  DAMAGE_COLORS.Slight,
+  2,
+  DAMAGE_COLORS.Moderate,
+  3,
+  DAMAGE_COLORS.Extensive,
+  4,
   DAMAGE_COLORS.Complete,
 ];
 
@@ -229,6 +238,20 @@ function boundsFromRegion(region: EvaluatedRegion): maplibregl.LngLatBounds {
     [region.lon - lonPad, region.lat - latPad],
     [region.lon + lonPad, region.lat + latPad]
   );
+}
+
+// Weighted average of DAMAGE_STATES' own index (0=None .. 4=Complete) over
+// a municipality's evaluated buildings -- the choropleth's severity input
+// (MUNICIPALITY_FILL_COLOR), so its color reads on the same scale as an
+// individual building's (DAMAGE_COLORS[damage_state]) rather than a
+// separately-scaled "fraction affected" ramp.
+function meanSeverity(stats: MunicipalityStats): number {
+  const total = stats.n_evaluated || 1;
+  const weighted = DAMAGE_STATES.reduce(
+    (sum, state, index) => sum + index * (stats.counts[state] ?? 0),
+    0
+  );
+  return weighted / total;
 }
 
 // Proportional-width stacked bar, one segment per damage class -- native
@@ -954,7 +977,7 @@ export function DamageMap({
         if (nAffected <= 0) continue;
         map.setFeatureState(
           { ...target, id: stats.municipality_code },
-          { n_evaluated: stats.n_evaluated, n_affected: nAffected }
+          { n_evaluated: stats.n_evaluated, n_affected: nAffected, mean_severity: meanSeverity(stats) }
         );
         loadedMunicipalityCodesRef.current.add(stats.municipality_code);
         affectedCodes.push(stats.municipality_code);
