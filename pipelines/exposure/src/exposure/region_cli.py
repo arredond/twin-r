@@ -20,13 +20,20 @@ above finishes -- opt-in and separate from `tiles_output`, since it's real
 extra per-building compute (buffering/neighbor-differencing, not just a
 re-tiling of already-parsed geometry) and resumable the same way the crawl
 itself is (`compute_debris_region` skips a municipality whose
-`<ine_code>.debris.parquet` part already exists).
+`<ine_code>.debris.parquet` part already exists). Tiling goes through
+`tile_debris_region_by_province` -- one tippecanoe run per province,
+merged with `tile-join` -- not a single national tippecanoe invocation:
+a full-country run (~51.5M ring features) crashed under memory pressure
+after ~3 hours with no useful checkpoint to resume from. Per-province
+batches (written to `<parts_dir>/../debris_batches/`) are each individually
+resumable the same way municipality parts are.
 """
 
 from __future__ import annotations
 
 import sys
 import time
+from pathlib import Path
 
 from .region import (
     MURCIA_ANDALUCIA_PROVINCES,
@@ -38,7 +45,7 @@ from .region import (
     crawl_navarra,
     crawl_region,
     crawl_vizcaya,
-    tile_debris_region,
+    tile_debris_region_by_province,
     tile_region,
 )
 
@@ -160,7 +167,10 @@ def main() -> None:
                     print(f"  {ine_code}: {error}")
 
         t0 = time.monotonic()
-        tile_debris_region(parts_dir, debris_tiles_output)
+        batches_dir = Path(parts_dir).parent / "debris_batches"
+        tile_debris_region_by_province(
+            parts_dir, batches_dir, debris_tiles_output, max_workers=max_workers
+        )
         print(f"wrote debris tiles to {debris_tiles_output} in {time.monotonic() - t0:.0f}s")
 
 

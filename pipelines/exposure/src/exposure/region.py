@@ -37,6 +37,8 @@ from __future__ import annotations
 
 import gzip
 import shutil
+import subprocess
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -426,6 +428,14 @@ def compute_debris_region(
     municipality's `buildings.parquet` part, writing one `<ine_code>.debris.parquet`
     part per municipality alongside it.
 
+    **Do not delete existing `*.debris.parquet` parts to force a full
+    recompute.** The national run (51.5M ring rows, 7,764 municipalities)
+    took multiple sessions and several crashes to complete -- see
+    ADR-0010's "Do not redo this from scratch" section before considering
+    it. A model change (real debris volumes, street clipping, a different
+    wall tolerance) should extend these rows/columns in place, not
+    regenerate the geometry from zero.
+
     Resumable the same way `crawl_region` is: a municipality whose debris
     part already exists is skipped, not recomputed -- debris computation is
     real per-building GIS work (buffering, neighbor differencing), not just
@@ -554,7 +564,155 @@ def tile_debris_region(
                     print(f"[{i}/{len(debris_parts)}] converted to GeoJSON")
         if not geojson_paths:
             raise ValueError(f"every debris part in {parts_dir} was empty")
-        return tile_geojson_files(sorted(geojson_paths), tiles_output, layer_name="debris")
+        return tile_geojson_files(
+            sorted(geojson_paths),
+            tiles_output,
+            layer_name="debris",
+            extra_args=["--drop-densest-as-needed"],
+        )
+
+
+def _province_code(part: Path) -> str:
+    # Municipality parts are named `<ine_code>.debris.parquet`; the first
+    # two digits of a 5-digit INE code are its province, and this holds
+    # uniformly across every source this pipeline crawls -- Catastro's own
+    # municipalities, and the Foral placeholder codes (_NAVARRA_PART_CODE
+    # "31000", _GIPUZKOA_PART_CODE "20000") and Alava/Vizcaya's own
+    # per-municipality codes are all still real province-prefixed 5-digit
+    # codes, not a special case to handle separately.
+    return part.name[:2]
+
+
+def tile_debris_region_by_province(
+    parts_dir: str | Path,
+    batches_dir: str | Path,
+    tiles_output: str | Path,
+    max_workers: int = 4,
+) -> Path:
+    """Tile every municipality's debris.parquet part into one national
+    PMTiles file, one province at a time, merged at the end with
+    tippecanoe's own `tile-join` -- an alternative to `tile_debris_region`
+    for national scale specifically.
+
+    **`batches_dir`'s existing `*.debris.pmtiles` files are a resumability
+    checkpoint, not scratch output -- don't delete them to force a full
+    re-tile unless you specifically mean to.** Re-tiling from
+    already-computed `debris.parquet` is comparatively cheap, but the
+    national run still took ~52 province tilings across multiple sessions
+    (several killed by the OS for low memory along the way) to get
+    through once. See ADR-0010's "Do not redo this from scratch".
+
+    Why this exists: a single tippecanoe invocation over the full national
+    debris dataset (~51.5M ring features, ~8x `buildings.pmtiles`' own
+    vertex count for the same country -- see ADR-0010) crashed after ~3
+    hours of real work under sustained memory pressure (tippecanoe exit
+    code 100, system swap climbing to its ceiling throughout, freed
+    instantly once the process died -- exactly the signature of an
+    out-of-memory abort, not a data or logic bug). Batching by province
+    caps how much any single tippecanoe process has to hold at once --
+    Spain's largest province is still a small fraction of the national
+    total -- trading one big memory spike for ~52 much smaller ones.
+
+    **Resumable at the province level**, the same principle ADR-0005
+    applies to the municipality crawl itself: a province whose
+    `<batches_dir>/<code>.debris.pmtiles` already exists is skipped
+    entirely, not re-tiled. A crash, an interrupted connection, or a
+    deliberate Ctrl-C partway through only costs the *currently in-flight*
+    province's work -- every already-finished province's PMTiles stays on
+    disk and is picked straight back up on the next call with the same
+    `batches_dir`. The final `tile-join` merge is cheap relative to any one
+    province's tiling (it only reads/repacks already-built tiles, doing no
+    geometry work), so re-running it after an interruption costs seconds to
+    minutes, not hours -- safe to just retry rather than needing its own
+    checkpointing.
+    """
+    parts_dir = Path(parts_dir)
+    batches_dir = Path(batches_dir)
+    batches_dir.mkdir(parents=True, exist_ok=True)
+
+    debris_parts = sorted(parts_dir.glob("*.debris.parquet"))
+    if not debris_parts:
+        raise ValueError(f"no debris.parquet parts found in {parts_dir}")
+
+    provinces: dict[str, list[Path]] = {}
+    for part in debris_parts:
+        provinces.setdefault(_province_code(part), []).append(part)
+
+    province_pmtiles: list[Path] = []
+    for i, (province, parts) in enumerate(sorted(provinces.items()), 1):
+        batch_output = batches_dir / f"{province}.debris.pmtiles"
+        if batch_output.exists():
+            print(f"[{i}/{len(provinces)}] province {province}: skipped (resumed)")
+            province_pmtiles.append(batch_output)
+            continue
+
+        t0 = time.monotonic()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            geojson_paths = []
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = {
+                    pool.submit(_convert_one_debris_part, part, tmp_path): part for part in parts
+                }
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result is not None:
+                        geojson_paths.append(result)
+            if not geojson_paths:
+                print(f"[{i}/{len(provinces)}] province {province}: no rings, skipping")
+                continue
+            # Tiled to a path *inside* the throwaway tmp dir first, only
+            # moved to the real `batch_output` (the resumability
+            # checkpoint) after tippecanoe exits successfully. Found the
+            # hard way tiling province 08 (Barcelona): tippecanoe writes
+            # its `-o` target incrementally as it works, so a mid-run
+            # failure (here, the 200,000-features-per-tile limit below)
+            # still leaves a real, but incomplete/truncated, file sitting
+            # at that exact path -- if that path were `batch_output`
+            # directly, the next resumed run would see it `.exists()` and
+            # wrongly skip re-tiling a province that never actually
+            # finished. `--drop-densest-as-needed` is what actually fixes
+            # the 200,000-feature error itself (see tile_geojson_files);
+            # the temp-then-move here is a second, independent safety net
+            # for whatever *other* way a province tiling could fail
+            # partway through.
+            tmp_output = tmp_path / batch_output.name
+            tile_geojson_files(
+                sorted(geojson_paths),
+                tmp_output,
+                layer_name="debris",
+                extra_args=["--drop-densest-as-needed"],
+            )
+            shutil.move(str(tmp_output), str(batch_output))
+        province_pmtiles.append(batch_output)
+        print(
+            f"[{i}/{len(provinces)}] province {province}: "
+            f"{len(parts)} municipalities tiled in {time.monotonic() - t0:.0f}s"
+        )
+
+    if not province_pmtiles:
+        raise ValueError(f"no province batches produced any tiles from {parts_dir}")
+
+    if shutil.which("tile-join") is None:
+        raise RuntimeError(
+            "tile-join not found on PATH -- it ships with tippecanoe "
+            "(e.g. `brew install tippecanoe`) but as a separate binary."
+        )
+
+    tiles_output = Path(tiles_output)
+    tiles_output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            ["tile-join", "-f", "-o", str(tiles_output), *[str(p) for p in province_pmtiles]],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(e.stdout, file=sys.stderr)
+        print(e.stderr, file=sys.stderr)
+        raise
+    return tiles_output
 
 
 def tile_region(parts_dir: str | Path, tiles_output: str | Path) -> Path:

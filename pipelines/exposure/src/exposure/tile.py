@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -78,7 +79,10 @@ def tile_municipalities(municipalities: gpd.GeoDataFrame, output_path: str | Pat
 
 
 def tile_geojson_files(
-    geojson_paths: list[Path], output_path: str | Path, layer_name: str = "buildings"
+    geojson_paths: list[Path],
+    output_path: str | Path,
+    layer_name: str = "buildings",
+    extra_args: list[str] | None = None,
 ) -> Path:
     """Run tippecanoe over one or more already-written GeoJSON files.
 
@@ -86,6 +90,20 @@ def tile_geojson_files(
     written to its own small GeoJSON part file as it's processed, so tiling
     the whole region never requires holding every municipality's buildings
     in memory at once -- tippecanoe merges the input files itself.
+
+    `extra_args`: passed straight through to tippecanoe. Needed for debris
+    tiling specifically (region.py's `tile_debris_region`/
+    `tile_debris_region_by_province`) -- tippecanoe hard-fails by default
+    once any single tile would exceed 200,000 features
+    ("tile N/N/N has 200001 (estimated ...) features, >200000"), and dense
+    urban debris rings (many small, heavily overlapping polygons -- see
+    ADR-0010's own measurement that debris has ~8x buildings.pmtiles' total
+    vertex count for the same area) hit that limit in a way plain building
+    footprints never have. `["--drop-densest-as-needed"]` tells it to
+    thin out the densest tiles instead of erroring -- a real, visible
+    trade-off (a handful of overlapping rings in the most crowded city
+    blocks may not all render at every zoom) but the alternative is no
+    tiles at all past whatever zoom first exceeded the limit.
     """
     if shutil.which("tippecanoe") is None:
         raise RuntimeError(
@@ -98,20 +116,33 @@ def tile_geojson_files(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    subprocess.run(
-        [
-            "tippecanoe",
-            "-o",
-            str(output_path),
-            "-zg",
-            "--extend-zooms-if-still-dropping",
-            "-l",
-            layer_name,
-            "--force",
-            *[str(p) for p in geojson_paths],
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        subprocess.run(
+            [
+                "tippecanoe",
+                "-o",
+                str(output_path),
+                "-zg",
+                "--extend-zooms-if-still-dropping",
+                "-l",
+                layer_name,
+                "--force",
+                *(extra_args or []),
+                *[str(p) for p in geojson_paths],
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        # `capture_output=True` silently swallows tippecanoe's own stdout/
+        # stderr unless printed here -- found the hard way running this at
+        # national scale (ADR-0010): a run crashed after ~3 hours and the
+        # only trace left behind was a bare "returned non-zero exit status
+        # 100", with tippecanoe's actual explanation already gone once the
+        # process exited. Printing both streams before re-raising means a
+        # future failure is diagnosable from the caller's own log, not lost.
+        print(e.stdout, file=sys.stderr)
+        print(e.stderr, file=sys.stderr)
+        raise
     return output_path

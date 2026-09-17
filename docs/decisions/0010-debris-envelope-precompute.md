@@ -1,8 +1,15 @@
 # ADR-0010: Precompute debris envelopes per building; scenarios only pick a ring
 
-Status: accepted (steps 1-2 of `milestone-1-plan.md` §10 implemented and
-run end-to-end against real Lorca data; see Consequences for the measured
-result)
+Status: accepted. Steps 1-2 of `milestone-1-plan.md` §10 are fully done at
+**national scale**: `debris.pmtiles` (9.26GB, 848,974 tiles, max zoom 16)
+covers all of Spain, built from 51,483,434 ring rows across 12,881,817
+buildings. See Consequences for the Lorca-scale measurement and a new
+section below for what national scale actually took and why.
+
+**This computed data is expensive and should be treated as a durable
+artifact, not something to casually regenerate.** See "Do not redo this
+from scratch" below before touching `compute_debris_region` or
+`tile_debris_region_by_province` again.
 
 ## Context
 
@@ -146,8 +153,127 @@ against real Lorca street layout can be judged visually.
   to ~24 with no visible loss at map scale, and `debris.pmtiles` from 77MB
   to **23MB** (5.6x `buildings.pmtiles`, back inside the original
   estimate). Extrapolating that ratio nationally (`buildings.pmtiles` is
-  1.6GB for 12.4M buildings) suggests **~9GB** for a national
-  `debris.pmtiles` — plausible to host, but still an extrapolation, not a
-  national-scale measurement; region/national tiling (task 2's remaining
-  scope) should re-measure directly rather than trust this scaling
-  assumption.
+  1.6GB for 12.4M buildings) suggested ~9GB for a national
+  `debris.pmtiles` — an extrapolation later confirmed almost exactly
+  right (9.26GB actual, see below), though the path to get there was not
+  a straightforward "run the same thing at 460x scale."
+
+## National-scale tiling: what actually happened
+
+Going from Lorca (27,884 buildings) to all of Spain (12.9M buildings,
+51.5M ring rows) surfaced four distinct, unrelated failure modes, each
+diagnosed and fixed in turn rather than worked around. Recorded here in
+full because each one looks like a different problem until you've seen it
+once — worth recognizing on sight next time.
+
+1. **Invalid geometry, two different ways.** `shapely`'s `simplify()` can
+   produce a self-intersecting (invalid) polygon even with its default
+   `preserve_topology=True`; separately, `make_valid()`'s own repair of a
+   broken input can produce a `GeometryCollection` whose `.boundary` is
+   silently `None` rather than raising. Both surfaced as confusing
+   `AttributeError`s several calls downstream, not at the point of the
+   actual defect, and both were municipality-killing before being caught
+   (one bad building's geometry took its whole municipality's debris
+   output down with it). Fixed in `debris.py`: `_polygonal_only()` runs
+   after both `make_valid()` and `simplify()`, and the per-building loop
+   catches `(GEOSException, AttributeError, ValueError)` so one
+   unrepairable building is skipped, not fatal. Repairing the ~15M (of
+   51.5M, ~29%) already-computed ring geometries that predated this fix
+   was a one-off in-place pass over the existing `debris.parquet` parts —
+   not a recompute (see "Do not redo this from scratch" below).
+2. **Disk space, disguised as something else twice over.** A single
+   tippecanoe invocation over the full national GeoJSON conversion filled
+   the temp filesystem outright (`OSError: No space left on device`) —
+   but *before* that was diagnosed, the same underlying cause (the
+   filesystem was already nearly full from a 101GB leftover temp
+   directory an earlier *killed* run never got to clean up, since
+   `tempfile.TemporaryDirectory`'s cleanup only runs if the process exits
+   normally) surfaced as `pyogrio.errors.FeatureError: Cannot write
+   feature` — GDAL wraps a plain out-of-disk write failure in the same
+   generic error it uses for a genuinely bad geometry, at a *different*
+   feature index on every retry. Don't trust that error message's framing
+   before checking `df -h` and for stale temp directories from prior
+   killed runs.
+3. **pyogrio/GDAL's plain `GeoJSON` writer, replaced with `GeoJSONSeq`.**
+   Once disk space and geometry were both ruled out, switching the
+   per-part writer from GDAL's `GeoJSON` driver (one buffered
+   `FeatureCollection` document) to `GeoJSONSeq` (RFC 8142, streamed
+   feature-by-feature — both GDAL and tippecanoe read it without
+   buffering the whole thing) fixed the remaining write fragility *and*
+   measurably helped: ~20% faster per-file conversion and roughly half
+   the gzip-compressed size for the same data, on top of parallelizing
+   the per-municipality conversion step itself (`ThreadPoolExecutor`,
+   same reasoning as `compute_debris_region`'s own pool — GDAL/gzip calls
+   release the GIL).
+4. **tippecanoe's 200,000-features-per-tile limit.** Dense city centres
+   (Barcelona province was the first to hit it) can pack enough
+   overlapping debris rings into one map tile to exceed tippecanoe's
+   default hard cap (`"tile N/N/N has 200001 (estimated ...) features,
+   >200000"`) — a real density difference from `buildings.pmtiles`,
+   which has never hit this, since footprints don't overlap the way
+   rings from adjacent buildings do. Fixed by passing
+   `--drop-densest-as-needed` (`tile_geojson_files`'s new `extra_args`
+   param) — a real, visible trade-off (the single most crowded tiles in
+   the densest city blocks won't render every overlapping ring at every
+   zoom) accepted in exchange for the tile existing at all.
+5. **Memory pressure, and the batching + resumability response.** Even
+   after fixes 1-4, a single tippecanoe process over all 51.5M national
+   ring features (~8x `buildings.pmtiles`' own vertex count for the same
+   country, measured directly on Madrid's municipality: 25.7M debris
+   vertices vs. 3.1M building vertices) repeatedly exhausted available
+   memory on a 17GB machine already under load from other applications —
+   once crashing outright after ~3 hours of real work with nothing to
+   resume from. The fix was architectural, not a bigger flag:
+   `tile_debris_region_by_province` (`region.py`) tiles one province at a
+   time (tippecanoe's own memory footprint scales with what it's
+   currently processing, and Spain's largest province is a small fraction
+   of the national total) and merges all ~52 results with tippecanoe's
+   own `tile-join` at the end — cheap, since it only repacks already-built
+   tiles, no geometry work. **Resumable at the province level**: each
+   province's PMTiles is written to a temp path first and only `move`d
+   into its real `<batches_dir>/<code>.debris.pmtiles` location after
+   tippecanoe exits successfully, so a province whose tiling was
+   interrupted (crash, OOM kill, Ctrl-C) never leaves a truncated file at
+   the path the resumability check looks for — confirmed directly: this
+   run was killed by the OS for low memory four separate times across the
+   52 provinces, and every single time, resuming picked up exactly at the
+   next unfinished province with zero lost work from already-completed
+   ones. Total: ~52 province tilings + one final merge, no single step
+   requiring more memory than one province's own data.
+
+## Do not redo this from scratch
+
+`compute_debris_region`'s 51.5M ring rows (7,764 municipality parts) and
+`tile_debris_region_by_province`'s resulting `debris.pmtiles` (9.26GB)
+represent real, expensive, already-paid compute — the ring computation
+alone is real per-building GIS work (not just I/O), and the full tiling
+pass took multiple sessions and several outright crashes to get through
+end to end (see above). **Both are resumable, idempotent artifacts, not
+scratch output** — treat them the way `buildings.parquet`/
+`buildings.pmtiles` are already treated (ADR-0005): safe to leave in place
+indefinitely, unsafe to casually delete and regenerate.
+
+If the debris model needs to change later (real Gaspar-Escribano et al.
+volumes replacing the 1/2/3/4m table if UPM shares them, street/open-space
+clipping, a different party-wall tolerance, anything else) the right move
+is almost always to **extend, not restart**:
+
+- A change to per-building geometry (e.g. street clipping) can run as an
+  in-place repair pass over the existing `debris.parquet` parts, the same
+  pattern already used once for the invalid-geometry fix above — read a
+  part, transform its `geometry` column, write it back, re-tile only the
+  provinces that actually changed.
+- A change that adds information (e.g. a real debris *volume* alongside
+  the existing ring geometry) fits as a new column on the existing rows,
+  not a new computation of the geometry itself.
+- Only a change to the *ring distances themselves* (the 1/2/3/4m table)
+  would need new geometry — and even then, per-municipality resumability
+  means a full recompute only costs whatever wasn't already done, the
+  same as any other resumed run.
+- Re-tiling (`tile_debris_region_by_province`) from already-computed
+  `debris.parquet` parts is comparatively cheap (hours, not the
+  multi-session effort of the geometry computation itself) and safe to
+  re-run in place — deleting `debris_batches/` to force a full re-tile
+  is reasonable; deleting `parts/*.debris.parquet` to force a full
+  re-*compute* is not, without a specific reason tied to a real geometry
+  change.

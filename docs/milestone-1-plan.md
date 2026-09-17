@@ -286,14 +286,22 @@ change is needed — only new pipeline output and a new frontend layer.
    neighboring footprints. Output `debris.parquet`, keyed by `building_id`.
    Wired into `pipeline.run()` as optional `debris_output`/
    `debris_tiles_output` args and `python -m exposure --debris/--debris-tiles`.
-2. **Debris tiling** ✅ for Lorca: tippecanoe → `debris.pmtiles`
-   (`tile_debris`, same path as `tile.py`'s `tile_buildings`). Verified
-   end-to-end against real Lorca data: 111,508 ring rows, 23MB
-   `debris.pmtiles` (5.6x `buildings.pmtiles`'s 4.1MB) after tuning buffer
-   resolution to fix an initial 77MB/18.8x result — see ADR-0010's
-   Consequences for the measurement and fix. Region/national tiling not
-   yet run — do that before trusting the ~9GB national extrapolation
-   noted in ADR-0010.
+2. **Debris tiling** ✅ **nationwide**: tippecanoe → `debris.pmtiles`,
+   scaled up from Lorca (111,508 ring rows, 23MB) through region scale to
+   all of Spain — 51,483,434 ring rows, 12,881,817 buildings, final
+   `debris.pmtiles` **9.26GB** (848,974 tiles, max zoom 16), deployed to
+   `apps/web/public/data/debris.pmtiles`. Getting from region to national
+   scale surfaced and fixed four distinct failure modes (invalid geometry
+   from `simplify()`/`make_valid()`, disk exhaustion masquerading as a
+   GDAL write error, tippecanoe's 200,000-features-per-tile limit in dense
+   cities, and repeated OOM kills from tiling all 51.5M features in one
+   process) — full writeup in ADR-0010's "National-scale tiling: what
+   actually happened". Final approach: `tile_debris_region_by_province`
+   tiles one province at a time (resumable — survived four separate OS-
+   triggered kills across the run with zero lost completed work) and
+   merges with `tile-join`. **This computed data is a durable artifact —
+   see ADR-0010's "Do not redo this from scratch" before deleting
+   `parts/*.debris.parquet` or `debris_batches/` to regenerate it.**
 3. **Frontend** ✅: a debris layer, styled via `setFeatureState` off the
    `damage_state_code` a scenario call already returns, joined by
    `building_id` — same pattern `DamageMap.tsx` already uses for building
