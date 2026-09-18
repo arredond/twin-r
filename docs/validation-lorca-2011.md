@@ -471,3 +471,88 @@ vendoring, no taxonomy judgment calls, no blocked-on-UPM data dependency.
    (taxonomy + IM-type fix) remain open — independent of, and complementary
    to, this one; the full 3×3 (taxonomy × IM-fix × probability-tier) grid
    this item originally asked for still needs 1–2 landed first.
+
+## 11. Live MERISUR-vs-twin-r comparison at matching "high probability", and two follow-up sanity checks
+
+With ADR-0015's site amplification shipped and backfilled (§10.7), the
+user ran both MERISUR's live tool and twin-r side by side on the same
+fault ("Alhama de Murcia (1/4)", max magnitude, automatic mode) at
+matching "high probability" tier. Result: twin-r moved from all-green to
+a green/yellow (None/Slight) mix — real progress — but MERISUR's own
+output is still mostly **Moderate**, with some Extensive and a few
+Complete. A substantial gap remains. Two sanity checks (literature only,
+no code changes) to see which of the two still-unresolved factors
+(§8/§10.4's recommendation 2, `questions-for-upm.md` #1/#2) is more
+likely responsible:
+
+### 11.1 Site amplification: ESRM20 checks out as roughly right, not the dominant remaining gap
+
+Navarro et al. (2014) itself is paywalled, but follow-up MASW/HVSR papers
+by the same group report Lorca's most-damaged 2011 zones as EC8 site
+classes **B2 (360–500 m/s)** and **C (180–360 m/s)**, softest around the
+dry Guadalentín riverbed and the La Alameda district (thickest Holocene
+colluvial/alluvial/anthropogenic fill — also the most heavily damaged
+district in 2011).
+
+Checked ESRM20's grid directly against this:
+
+- Within ~5km of Lorca's centre, the grid spans **228–837 m/s**, including
+  real soft pockets to the south (228–290 m/s) consistent with the
+  Guadalentín basin's known fill.
+- The actual backfilled values across Lorca's 10,578 buildings range
+  **258–641 m/s (median 388)** — landing squarely in Navarro et al.'s own
+  reported B2/C range for the damaged zones, just not quite reaching the
+  ~180 m/s floor some MASW spot measurements found at the softest
+  riverbed points.
+
+**Conclusion: ESRM20 is a reasonable match for Lorca, not an obvious
+gap.** It's coarser than a real geophysical survey (a national
+proxy-inferred grid smooths over the finest anthropogenic-fill pockets a
+real survey resolves), but it isn't systematically misclassifying Lorca as
+rock, and the ~55% SA(0.3s) bump it already buys (§10.7) is roughly the
+right order of magnitude for this site condition. Site amplification
+doesn't look like the dominant remaining cause of the MERISUR gap.
+`questions-for-upm.md` #2 is updated to ask for Navarro et al.'s real
+microzonation specifically to put a quantified error bar on this "coarse
+but roughly right" finding, not because site amplification looks broken.
+
+### 11.2 Vulnerability classes: a specific, previously-unknown lead
+
+Searching for how Lorca's vulnerability has actually been modeled (beyond
+what `merisur.md` §4.5 already documented) surfaced two papers not
+previously in this project's research: *"Vulnerabilidad y daño en el
+terremoto de Lorca de 2011"* and a related Bulletin of Earthquake
+Engineering paper proposing new **RISK-UE Level 1 (LM1) Vulnerability
+Index Method** behaviour modifiers, derived by fitting against Lorca's own
+2011 damage data (`merisur.md` §4.5, updated).
+
+The category difference matters more than any specific number: RISK-UE
+LM1 is a **semi-empirical macroseismic method** — a Vulnerability Index
+per building type calibrated directly against real EMS-98 damage
+statistics from Mediterranean/Italian masonry earthquakes. `twin-r`'s
+Martins & Silva (2020) substitute (§4's root cause, still in use even
+after ADR-0012's vernacular-masonry fix) is a **globally-averaged
+analytical model** — nonlinear time-history analysis of representative
+archetypes, not calibrated against any real Mediterranean masonry damage
+record. Analytically-derived global curves are documented in the
+literature to run more conservative (lower P(damage) at a given intensity)
+than damage-calibrated semi-empirical ones for exactly this building
+type — even `MUR-STRUB`, the most-vulnerable class currently vendored, is
+still in the "not calibrated to real Mediterranean damage" category.
+
+**This is the more likely explanation for the remaining green/yellow-vs-
+moderate/extensive gap.** Not confirmed — we don't yet know whether the
+*live* MERISUR tool's damage computation actually runs RISK-UE LM1, the
+mechanical/IDCM chain `merisur.md` §4.6 describes, or some blend of the
+two feeding into IDCM's capacity curves. `questions-for-upm.md` #1 is
+updated with this specific lead, asking directly rather than assuming.
+
+### 11.3 Where this leaves things
+
+Both open UPM asks (`questions-for-upm.md` #1 and #2) remain the path to
+closing this gap for real — this section doesn't resolve either, it
+narrows *where to look*: site amplification is probably not the story,
+vulnerability-curve methodology (specifically, semi-empirical/
+damage-calibrated vs. analytical/globally-averaged) probably is. No code
+changes made here, per explicit instruction — this is research to sharpen
+the UPM asks, not an implementation task.
