@@ -153,7 +153,22 @@ geophysical measurements (Vs profiles etc.). 🟢 This is the single most
 Lorca-specific, least-portable piece of the chain — there is no equivalent
 microzonation for most of Spain, so a national clone must substitute something
 else entirely (Vs30 / Eurocode 8 soil class — see the national-expansion notes
-in `initial-chatgpt.md`, revisited properly once we scope milestone 2).
+in `initial-chatgpt.md`).
+
+**Resolved for milestone 2, national-scale**: [ADR-0015](./decisions/0015-eshm20-site-amplification.md)
+adopts ESRM20 (European Seismic Risk Model 2020)'s national Vs30 grid
+(EFEHR/SED-ETH Zürich, CC BY 4.0, ~30 arc-second resolution) instead of
+waiting on a Lorca-only source, feeding it directly into the Akkar et al.
+(2014) GMPE's own built-in Vs30 site term (§4.2). 🟢 The paper itself
+(above) stays paywalled, but follow-up MASW/HVSR papers from the same
+group report Lorca's most-damaged 2011 zones as EC8 classes B2
+(360–500 m/s) and C (180–360 m/s) — checked ESRM20's grid directly against
+this and found real Lorca buildings backfilled to 258–641 m/s (median
+388), landing in the same B2/C range, just not quite reaching the ~180
+m/s floor the finest riverbed MASW spot measurements found. 🟡 for "roughly
+right, coarser than a real survey" as a characterization; 🔴 for an actual
+quantified error bar, which is what `questions-for-upm.md` #2 is now
+asking for specifically.
 
 ### 4.4 Exposure (buildings)
 
@@ -201,6 +216,30 @@ and the papers caution not to conflate them: 🟢
    Bayesian Networks, ~77–80% accuracy/F1 in Lorca trials. 🟢 This is a research
    result about *how MERISUR assigned* vulnerability classes at scale, not
    necessarily something the live tool executes at request time.
+
+**A fourth, separate line found later (2025), while chasing why twin-r's
+own damage output stayed far below MERISUR's even after site amplification
+was added — ADR-0015, `validation-lorca-2011.md` §10.7):** a paper titled
+*"Vulnerabilidad y daño en el terremoto de Lorca de 2011"* and a related
+Bulletin of Earthquake Engineering paper propose new **RISK-UE Level 1
+(LM1) Vulnerability Index Method** behaviour modifiers, derived by fitting
+against Lorca's own 2011 damage data. 🟢 for the papers' existence and
+their Lorca-specific recalibration; 🔴 for whether this method (as opposed
+to, or alongside, the mechanical/IDCM chain in §4.6) is actually what the
+*live* MERISUR tool runs at request time — not established either way yet,
+flagged as `questions-for-upm.md` #1(b). Worth spelling out precisely
+because it's a **different category of model**, not just different
+numbers: RISK-UE LM1 is semi-empirical/macroseismic (a Vulnerability Index
+per building type, calibrated directly against real EMS-98 damage
+statistics from Mediterranean/Italian masonry earthquakes), whereas
+`twin-r`'s Martins & Silva (2020) substitute (§4.6, `validation-lorca-2011.md`)
+is a globally-averaged *analytical* model (nonlinear time-history analysis
+of representative archetypes, not calibrated against any real
+Mediterranean masonry damage record). Analytically-derived global curves
+are documented in the literature to run more conservative (lower P(damage)
+at a given intensity) than damage-calibrated semi-empirical ones for
+exactly this building type — a plausible, though not yet confirmed,
+explanation for a large share of the remaining twin-r/MERISUR gap.
 
 ### 4.6 Damage model: IDCM (FEMA 440)
 
@@ -288,7 +327,7 @@ damage layer → (optional/expensive) debris layer.
 | Faults | QAFI (IGME), CC BY-SA 4.0 | 🟢 national |
 | Manual rupture | user input | 🟢 always |
 | GMPE | Akkar et al. 2014 (in OpenQuake `hazardlib`) | 🟢 national/European |
-| Site effect | Navarro et al. 2014, Lorca-only 5-class microzonation | 🔴 Lorca-specific, needs replacement (Vs30/EC8) |
+| Site effect | Navarro et al. 2014, Lorca-only 5-class microzonation | 🟢 national substitute shipped: ESRM20 Vs30 grid (ADR-0015), roughly matches Navarro's reported EC8 classes at Lorca per a follow-up-paper check |
 | Exposure base | Catastro + PNOA LiDAR/orthophoto + fieldwork | 🟡 Catastro/PNOA are national; fieldwork isn't reproducible under our constraints |
 | Typology | Risk-UE MBTs (6 classes identified in Lorca) | 🟢 Risk-UE/GEM taxonomies are general; the *classification* of Lorca's stock isn't |
 | Damage model | IDCM / FEMA 440 | 🟢 general method, needs capacity curves per class |
@@ -331,4 +370,9 @@ with each answer.
 - [QAFI — Quaternary Active Faults Database of Iberia (IGME)](https://info.igme.es/qafi/)
 - [OpenQuake hazardlib: Akkar et al. 2014 GSIM](https://docs.openquake.org/old/oq-hazardlib/0.19/gsim/akkar_2014.html)
 - Núñez Murillo, A. (2017), UPM doctoral thesis on seismic scenario simulation for the Iberian Peninsula, Balearic and Canary Islands, [Archivo Digital UPM](https://oa.upm.es/47779/) — adjacent UPM work, not MERISUR itself, useful for national-scale site-effect ideas later.
+- Navarro, M., A. García-Jerez, F. Alcalá, F. Vidal, T. Enomoto (2014), *Local site effect microzonation of Lorca town (southern Spain)*, Bulletin of Earthquake Engineering, [Springer](https://link.springer.com/article/10.1007/s10518-013-9491-y) (paywalled — abstract/citation only)
+- Follow-up MASW/HVSR papers by the same group (used for §4.3's EC8-class numbers, since the main paper above is paywalled): *Shear Wave Velocity Structure for Seismic Microzonation of Lorca town (SE Spain) from MASW Analysis* and *Shear-wave velocity based seismic microzonation of Lorca city (SE Spain) from MASW analysis*, both via [ResearchGate](https://www.researchgate.net/publication/266633194) / [Earthdoc](https://www.earthdoc.org/content/papers/10.3997/2214-4609.20131351)
+- ESRM20 (European Seismic Risk Model 2020) repository, EFEHR/SED-ETH Zürich, CC BY 4.0: [gitlab.seismo.ethz.ch/efehr/esrm20](https://gitlab.seismo.ethz.ch/efehr/esrm20) — Vs30 site model source for ADR-0015
+- *Vulnerabilidad y daño en el terremoto de Lorca de 2011*, [ResearchGate](https://www.researchgate.net/publication/259199076_VULNERABILIDAD_Y_DANO_EN_EL_TERREMOTO_DE_LORCA_DE_2011_Vulnerability_and_earthquake_damage_in_Lorca_2011) — RISK-UE LM1 Vulnerability Index Method applied to Lorca's 2011 damage (§4.5)
+- *Proposal for new values of behaviour modifiers for seismic vulnerability evaluation of reinforced concrete buildings applied to Lorca (Spain) using damage data from the 2011 earthquake*, Bulletin of Earthquake Engineering, [Springer](https://link.springer.com/article/10.1007/s10518-017-0100-3) — Lorca-recalibrated RISK-UE LM1 behaviour modifiers (§4.5)
 - [`initial-chatgpt.md`](./initial-chatgpt.md) — exploratory conversation (not a primary source; used only to shape research questions)

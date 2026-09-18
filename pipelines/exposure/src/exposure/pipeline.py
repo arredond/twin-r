@@ -1,4 +1,13 @@
-"""Orchestrate: download -> parse -> taxonomy -> buildings.parquet + exposure.parquet."""
+"""Orchestrate: download -> parse -> taxonomy -> buildings.parquet + exposure.parquet.
+
+`build_exposure` stamps a `vs30` column onto every building it processes
+(ADR-0015, docs/decisions/0015-eshm20-site-amplification.md) -- every
+future crawl gets real site amplification natively, the same way
+ADR-0006's centroid/bbox columns and ADR-0014's municipality_code column
+are populated at ingest time rather than needing a backfill pass. Already-
+crawled data from before this landed needs the one-time
+`backfill.py --vs30` retrofit.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +22,7 @@ from .debris import compute_debris_envelopes
 from .parse import load_buildings
 from .taxonomy import TAXONOMY_SOURCE, assign_taxonomy
 from .tile import tile_buildings, tile_debris
+from .vs30 import add_vs30_column
 
 
 def build_exposure(
@@ -39,6 +49,11 @@ def build_exposure(
     buildings = buildings.copy()
     buildings["municipality"] = municipality_name
     buildings["municipality_code"] = municipality_code
+    # Process-wide cached grid/KD-tree (vs30._cached_grid_and_tree) -- the
+    # 17MB fetch + tree build happens once per crawl run, not once per
+    # municipality, even though this call site doesn't manage that cache
+    # itself. See ADR-0015.
+    buildings = add_vs30_column(buildings)
 
     # Zipping the two columns directly (rather than `buildings.apply(...,
     # axis=1)`) avoids per-row-apply's untyped-tuple-return ambiguity for

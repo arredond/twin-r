@@ -26,6 +26,7 @@ import pandas as pd
 from .damage import evaluate_damage_batch
 from .fragility_lookup import FragilityTable
 from .ground_motion import (
+    DEFAULT_VS30,
     IM_TYPE_TO_IMT,
     compute_intensity_gridded,
     estimate_significant_distance_km,
@@ -108,6 +109,7 @@ def _load_sites(
             b.centroid_lon AS lon,
             b.centroid_lat AS lat,
             b.municipality_code,
+            COALESCE(b.vs30, ?) AS vs30,
             e.taxonomy_class,
             e.height_class
         FROM read_parquet(?) AS b
@@ -116,6 +118,7 @@ def _load_sites(
           AND b.centroid_lat BETWEEN ? AND ?
         """,
         [
+            DEFAULT_VS30,
             buildings_path,
             exposure_path,
             lon_min - lon_pad,
@@ -196,9 +199,15 @@ def run_scenario(
     # a GMPE evaluation of an IM type nothing here is indexed by.
     lats = sites["lat"].to_numpy()
     lons = sites["lon"].to_numpy()
+    vs30 = sites["vs30"].to_numpy()
     im_values_by_type = {
         im_type: compute_intensity_gridded(
-            rupture, lats, lons, IM_TYPE_TO_IMT[im_type], sigma_multiplier=sigma_multiplier
+            rupture,
+            lats,
+            lons,
+            IM_TYPE_TO_IMT[im_type],
+            vs30=vs30,
+            sigma_multiplier=sigma_multiplier,
         )
         for im_type in fragility_table.used_im_types()
     }

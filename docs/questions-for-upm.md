@@ -29,16 +29,51 @@ pipeline predicts *zero* damaged buildings against a reality of 6,400+
 damaged — traced to this substitution, not a bug (full writeup in
 `validation-lorca-2011.md`).
 
-**Question:** Could you share the capacity curves (or resulting fragility
-functions) developed for Lorca's Risk-UE building classes — the ones built
-from pushover analysis of representative structural models
-(`merisur.md` §4.5)? Even a subset (the classes actually present in Lorca's
-old town) would let us validate against a real calibration instead of a
-plausibility check.
+**Update, sharper after ADR-0015 (site amplification) and a live
+MERISUR-vs-twin-r comparison at matching "high probability" tier:** with
+real per-building Vs30 now wired in (see question 2's update below),
+twin-r moved from all-green to a green/yellow (None/Slight) mix — but
+MERISUR's own output for the same fault/tier is mostly **Moderate**, with
+some Extensive and a few Complete. Site amplification checks out as
+roughly correct (see question 2), which points the remaining gap squarely
+at vulnerability. Searching for how Lorca's vulnerability has actually
+been modeled surfaced a specific, previously-unknown-to-us lead: a
+paper titled *"Vulnerabilidad y daño en el terremoto de Lorca de 2011"*
+and a related Bulletin of Earthquake Engineering paper proposing new
+**RISK-UE Level 1 (LM1) Vulnerability Index Method** behaviour modifiers
+*derived from Lorca's own 2011 damage data*. This is a **semi-empirical
+macroseismic method** (a Vulnerability Index per building type, calibrated
+against real EMS-98 damage statistics from Mediterranean/Italian masonry
+earthquakes) — categorically different from Martins & Silva (2020), which
+is a **globally-averaged analytical model** (nonlinear time-history
+analysis of representative archetypes, not calibrated against any real
+Mediterranean masonry damage). Even our most-vulnerable vendored class
+(`MUR-STRUB`, ADR-0012) is still in the second category, and
+analytically-derived global curves are documented to run more
+conservative than damage-calibrated semi-empirical ones for exactly this
+building type. We don't yet know whether the *live* MERISUR tool's damage
+model is this RISK-UE LM1 method specifically, the mechanical/IDCM chain
+`merisur.md` §4.6 documents, or some blend of both feeding into IDCM's
+capacity curves — worth asking directly rather than assuming.
+
+**Question:** (a) Could you share the capacity curves (or resulting
+fragility functions) developed for Lorca's Risk-UE building classes —
+the ones built from pushover analysis of representative structural models
+(`merisur.md` §4.5)? Even a subset (the classes actually present in
+Lorca's old town) would let us validate against a real calibration
+instead of a plausibility check. (b) Is the RISK-UE LM1 Vulnerability
+Index Method (with the Lorca-recalibrated behaviour modifiers referenced
+above) part of the live tool's actual damage computation, or a separate
+piece of academic work alongside it? If it *is* in the live chain, could
+you share the recalibrated Iv values/behaviour modifiers specifically —
+a much smaller, more self-contained ask than the full mechanical capacity
+curves in (a).
 
 **What we'd do with it:** Replace (or at least benchmark) our generic
-fragility functions with the real Lorca-specific ones, closing the gap the
-2011 validation run surfaced.
+fragility functions with the real Lorca-specific ones (or, if (b) applies,
+implement the RISK-UE LM1 method itself as an alternative damage model
+path), closing the gap both the original 2011 validation run and this
+newer MERISUR-vs-twin-r comparison surfaced.
 
 ### 2. Lorca soil microzonation data (Navarro et al. 2014)
 
@@ -50,14 +85,50 @@ currently omits entirely (flat reference-rock Vs30 everywhere). This is one
 of the "other simplifications" flagged as a contributor in our 2011
 validation run.
 
+**Update, partially superseding the original ask below:** since this
+question was first written, we adopted a **national** Vs30 source instead
+of waiting on a Lorca-only one — [ADR-0015](./decisions/0015-eshm20-site-amplification.md)
+integrates the ESRM20 (European Seismic Risk Model 2020) Vs30 grid
+(EFEHR/SED-ETH Zürich, CC BY 4.0), which covers all of Spain at ~30
+arc-second resolution and plugs directly into the Akkar et al. (2014)
+GMPE's existing site term. Checked directly at Lorca's town centre: it
+already gives a soft-soil value (~383 m/s) in the right direction vs. our
+previous flat 800 m/s default, and moves SA(0.3s) for the real 2011
+rupture up ~55%.
+
+**Second update, after a targeted literature check specifically to sanity-
+check ESRM20 against Navarro et al.'s real microzonation (no access to
+the paper itself, still paywalled — checked follow-up MASW/HVSR papers by
+the same group instead):** those papers report EC8 site classes **B2
+(360–500 m/s)** and **C (180–360 m/s)** for Lorca's most-damaged 2011
+zones, softest around the dry Guadalentín riverbed and the La Alameda
+district (thickest Holocene colluvial/alluvial/anthropogenic fill — also
+the most heavily damaged district). Checked ESRM20's grid directly against
+this: within ~5km of Lorca's centre it spans 228–837 m/s including real
+soft pockets to the south (228–290 m/s, consistent with the Guadalentín
+basin fill), and the actual backfilled values across Lorca's 10,578
+buildings range 258–641 m/s (median 388) — landing squarely in Navarro et
+al.'s own reported B2/C range, just not quite reaching the ~180 m/s floor
+some MASW spot measurements found at the softest riverbed points. **This
+is a reasonable match, not an obvious gap** — site amplification doesn't
+look like the dominant remaining cause of the still-large gap vs.
+MERISUR's own damage output (see question 1's update); it's ESRM20's
+coarse, proxy-inferred resolution smoothing over the very finest
+anthropogenic-fill pockets, not a wrong site class entirely. This
+*doesn't* replace the value of Navarro et al. (2014)'s own microzonation —
+so the ask below stands, just reframed: it's now a **validation
+reference** to put an actual number on that "coarse but roughly right"
+finding, not the only path to having site amplification at all.
+
 **Question:** Is the microzonation itself (polygon boundaries + amplification
 factors per class) available to share, even just for Lorca as a reference/
 validation case?
 
-**What we'd do with it:** Add site amplification to the Lorca scenario as a
-validation exercise, before deciding how to generalize site effects
-nationally (where we already know we can't reuse Lorca's own
-microzonation — see `milestone-1-plan.md` §2).
+**What we'd do with it:** Compare ESRM20's inferred Vs30/amplification
+against Navarro et al.'s real microzonation specifically over Lorca, to
+put an actual error bar on how much the national proxy-based source is
+costing us in accuracy, before deciding whether a similar effort is worth
+it elsewhere.
 
 ## Medium priority
 
