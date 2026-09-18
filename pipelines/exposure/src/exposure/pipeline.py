@@ -1,16 +1,12 @@
 """Orchestrate: download -> parse -> taxonomy -> buildings.parquet + exposure.parquet.
 
-NOTE (ADR-0015, docs/decisions/0015-eshm20-site-amplification.md): `vs30`
-is a precomputed-column, not a live-crawl one yet -- `vs30.add_vs30_column`
-exists and `backfill.py --vs30` retrofits already-crawled parts, but this
-function doesn't call it directly (it needs a network fetch of the ESRM20
-grid + a KD-tree build that's wasteful to repeat per municipality during a
-crawl -- see `vs30.py`'s `grid`/`tree` passthrough params, meant to be
-fetched once by a caller and threaded through many buildings). Once a
-national backfill has run, a future crawl orchestrator (this function or
-`region.py`) should thread a pre-fetched `grid`/`tree` through here the
-same way, so newly-crawled municipalities get `vs30` for free instead of
-needing a follow-up backfill pass every time.
+`build_exposure` stamps a `vs30` column onto every building it processes
+(ADR-0015, docs/decisions/0015-eshm20-site-amplification.md) -- every
+future crawl gets real site amplification natively, the same way
+ADR-0006's centroid/bbox columns and ADR-0014's municipality_code column
+are populated at ingest time rather than needing a backfill pass. Already-
+crawled data from before this landed needs the one-time
+`backfill.py --vs30` retrofit.
 """
 
 from __future__ import annotations
@@ -26,6 +22,7 @@ from .debris import compute_debris_envelopes
 from .parse import load_buildings
 from .taxonomy import TAXONOMY_SOURCE, assign_taxonomy
 from .tile import tile_buildings, tile_debris
+from .vs30 import add_vs30_column
 
 
 def build_exposure(
@@ -52,6 +49,11 @@ def build_exposure(
     buildings = buildings.copy()
     buildings["municipality"] = municipality_name
     buildings["municipality_code"] = municipality_code
+    # Process-wide cached grid/KD-tree (vs30._cached_grid_and_tree) -- the
+    # 17MB fetch + tree build happens once per crawl run, not once per
+    # municipality, even though this call site doesn't manage that cache
+    # itself. See ADR-0015.
+    buildings = add_vs30_column(buildings)
 
     # Zipping the two columns directly (rather than `buildings.apply(...,
     # axis=1)`) avoids per-row-apply's untyped-tuple-return ambiguity for

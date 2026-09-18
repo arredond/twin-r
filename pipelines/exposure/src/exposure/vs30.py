@@ -25,6 +25,7 @@ amplification model on top of the GMPE's own site term.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 import geopandas as gpd
@@ -101,6 +102,23 @@ def lookup_vs30(
     return vs30
 
 
+@lru_cache(maxsize=1)
+def _cached_grid_and_tree() -> tuple[pd.DataFrame, cKDTree]:
+    """Fetch + index the Spain Vs30 grid once per process, not once per
+    municipality.
+
+    A crawl (`region.py`) processes hundreds to thousands of municipalities
+    in one run, each calling `build_exposure` -> `add_vs30_column`
+    separately -- without this cache, that's one redundant 17MB HTTP fetch
+    and one redundant ~230k-point KD-tree build per municipality instead of
+    one per process. `lru_cache(maxsize=1)` (not a plain module-level
+    global) so it's still lazy -- a caller that never touches vs30 (e.g.
+    unit tests) never pays the network cost.
+    """
+    grid = fetch_spain_vs30_grid()
+    return grid, build_vs30_lookup(grid)
+
+
 def add_vs30_column(
     buildings: gpd.GeoDataFrame,
     grid: pd.DataFrame | None = None,
@@ -115,9 +133,13 @@ def add_vs30_column(
     doesn't change, so its Vs30 lookup shouldn't be redone at request time
     either (ADR-0015).
 
-    `grid`/`tree` let a caller processing many parts (`backfill.py`,
-    `region.py`) fetch+build the KD-tree once and pass it through, instead
-    of re-downloading the 17MB source CSV and rebuilding the tree per part.
+    `grid`/`tree` let a caller processing many parts (`backfill.py`) fetch
+    + build the KD-tree once and pass it through explicitly. When neither
+    is given (the default -- this is what `pipeline.build_exposure` calls
+    with for every live crawl), falls back to `_cached_grid_and_tree`'s
+    process-wide cache instead of a bare per-call fetch, so a normal crawl
+    run gets the same "fetch once" behavior without every call site having
+    to manage the grid/tree itself.
     """
     if "centroid_lon" not in buildings.columns:
         raise ValueError(
@@ -125,7 +147,8 @@ def add_vs30_column(
             "add_spatial_index_columns first (parse.py)"
         )
     if grid is None:
-        grid = fetch_spain_vs30_grid()
+        grid, cached_tree = _cached_grid_and_tree()
+        tree = tree or cached_tree
     result = buildings.copy()
     result["vs30"] = lookup_vs30(
         result["centroid_lon"].to_numpy(),
