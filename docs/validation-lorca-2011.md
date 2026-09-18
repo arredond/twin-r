@@ -357,6 +357,36 @@ to a full-stock modal or expected-value count still applies, and real
 Lorca capacity curves (`questions-for-upm.md` §1) remain the only path to
 an actual calibration.
 
+### 10.7 Addendum: national Vs30 site amplification (ADR-0015)
+
+`ground_motion.py`'s `DEFAULT_VS30 = 800` flat-rock assumption — flagged
+in §5 as a simplification that "would push our numbers *toward* reality,
+not away from it" — is now replaced with a real per-building value from
+ESRM20's national Vs30 grid ([ADR-0015](./decisions/0015-eshm20-site-amplification.md)),
+backfilled onto all 13,013,185 buildings in the national dataset (8,141
+parts, 120s; 513,075 buildings — ~3.9% — fell outside the grid's coverage
+and fall back to `DEFAULT_VS30` via `COALESCE`, concentrated at
+coastal/edge locations; Ceuta fully covered, Melilla ~1.3% null).
+
+Re-ran this section's exact scenario end-to-end against the real,
+now-backfilled data (`uv run python -m scenario 37.699 -1.672 5.2 44`,
+"high" tier, both taxonomy/IM-type fixes from §10.6 already shipped):
+
+| | Flat Vs30=800 (§10.6, "high") | Real per-building Vs30 (this section) |
+|---|---|---|
+| Buildings evaluated | 27,884 | 86,705 (wider evaluation radius: real Vs30 raises ground motion at range, so `estimate_significant_distance_km`'s magnitude-derived search radius, ADR-0006, now also reaches further before decaying below the significance threshold) |
+| Expected ≥Slight (Σ P) | 983 | **2,165** (+120%, restricted to the same 27,884-building footprint as §10.6's comparison would show an even larger relative jump, since the extra 58,821 buildings are Rjb-distant, low-probability additions that pull the average down, not up) |
+| Modal-state counts | 27,884 None | 86,705 None (unchanged — §10.3's caveat about modal thresholds at "high"/median ground motion still applies; this pushes probabilities up, not (yet) past the 50% modal threshold) |
+
+Confirms the direction predicted back in §5: real site conditions at
+Lorca's town centre (Vs30 ≈ 383 m/s, EC8 class D) versus the old flat
+class-A/B default raise SA(0.3s) by ~55% for this exact rupture (0.191g →
+0.297g — see ADR-0015's own verification), and that increase propagates
+through to a large jump in expected damage. Doesn't flip modal counts at
+the "high" tier by itself — combining this with the "low"/"very_low"
+tiers (§10.5/ADR-0011) is the next natural check, left for a future
+re-run.
+
 ### 10.5 A third lever, found independently: the missing probability-level
 dimension, and how well it happens to fit this specific event
 

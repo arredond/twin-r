@@ -1,6 +1,6 @@
 # ADR-0015: National site amplification via ESRM20's Vs30 grid
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -81,9 +81,14 @@ centroid/bbox columns, ADR-0014's `municipality_code` column):
 `centroid_lon`/`centroid_lat`. A new `vs30.py` module
 (`pipelines/exposure/src/exposure/vs30.py`) does a KD-tree nearest-neighbor
 lookup from each building's existing centroid into the ESRM20 grid and
-writes the result as a `vs30` column on `buildings.parquet`. A
-`backfill.py --vs30` mode retrofits already-crawled parts, mirroring
-`--municipality-code`. `engine.py`'s `_load_sites` reads
+writes the result as a `vs30` column on `buildings.parquet`.
+`pipeline.build_exposure` calls it directly, so **every future crawl gets
+`vs30` natively at ingest time**, the same as `municipality_code`
+(ADR-0014) — backed by an `lru_cache(maxsize=1)` singleton
+(`vs30._cached_grid_and_tree`) so a multi-thousand-municipality crawl run
+fetches the grid and builds the KD-tree once, not once per municipality. A
+`backfill.py --vs30` mode retrofits already-crawled parts from before this
+landed, mirroring `--municipality-code`. `engine.py`'s `_load_sites` reads
 `COALESCE(b.vs30, ?)` (falling back to `DEFAULT_VS30`) instead of deriving
 anything at request time, and `ground_motion.py`'s `compute_intensity`/
 `compute_intensity_gridded` now accept `vs30` as either a scalar or a
@@ -138,38 +143,34 @@ more than one or two distinct grid points to begin with.
 
 - `buildings.parquet`'s schema gains a `vs30` column, following the same
   precompute-then-backfill pattern as `centroid_lon`/`municipality_code`.
-  **Not yet backfilled onto the real national dataset** (currently 7,764
-  parts / ~12.9M buildings, per ADR-0014's count) — until that backfill
-  runs, `engine.py`'s `COALESCE(b.vs30, ?)` will raise a `BinderException`
-  (the column must exist in the parquet schema for `COALESCE` to reference
-  it at all, same hard requirement ADR-0014's `municipality_code` imposed).
-  **This backfill mutates the shared `data/` tree multiple sessions rely
-  on and should be run as a deliberate, confirmed step, not silently as
-  part of landing this ADR.** `test_engine_integration.py`'s real-data
-  integration test will fail until it's run — expected, not a regression,
-  same as ADR-0014's rollout.
+  `pipeline.build_exposure` now stamps it on every future crawl natively
+  (like `municipality_code`, ADR-0014). **Backfilled onto the real national
+  dataset**: all 8,141 parts / 13,013,185 buildings, in 120s. 513,075
+  buildings (~3.9%) fell outside the grid's coverage
+  (`_MAX_LOOKUP_DISTANCE_DEG`) and got `NULL`, falling back to
+  `DEFAULT_VS30` via `engine.py`'s `COALESCE` at query time — concentrated
+  at coastal/edge locations, as expected. Ceuta (51001) fully covered (0
+  nulls); Melilla (52001) ~1.3% null (126/9,799) — both usable, not the
+  "worth checking before trusting" gap this consequence originally
+  flagged.
 - `pipelines/exposure` gains a new runtime dependency (`scipy`, for
-  `cKDTree`) and a new network dependency at backfill time (fetches a
-  17.8MB CSV from GitLab) — not needed for the Catastro-parsing path
-  itself, only for the `--vs30` backfill/pipeline step.
+  `cKDTree`) and a new network dependency (fetches a 17.8MB CSV from
+  GitLab, cached per-process via `vs30._cached_grid_and_tree`) — paid once
+  per crawl run or backfill invocation, not per municipality/part.
 - `ground_motion.py`'s `vs30` parameters (`compute_intensity`,
   `compute_intensity_gridded`) now accept `float | np.ndarray`; any other
   caller passing a scalar (existing tests, `estimate_significant_distance_km`)
-  is unaffected.
-- Opens the door to a real, better-than-plausibility-check validation of
-  the 2011 Lorca event once combined with the existing taxonomy/IM-type
-  fixes (ADR-0012) and probability-level selector (ADR-0011) — worth a
-  follow-up re-run of `validation-lorca-2011.md`'s scenario once the
-  backfill lands.
+  is unaffected. Full scenario test suite (70 tests) passes with these
+  changes, including the real-data `test_engine_integration.py` case that
+  requires the backfill.
+- Re-ran `validation-lorca-2011.md`'s real 2011 scenario against the
+  backfilled data (§10.7 of that doc): expected ≥Slight damage (Σ P) goes
+  from 983 to 2,165 (+120%) at the "high"/median tier — confirms the
+  ~55% SA(0.3s) increase this ADR measured at Lorca propagates through to
+  a large jump in expected damage, though not yet enough to flip modal
+  counts at that tier by itself (still all-None; combining with the
+  "low"/"very_low" tiers, ADR-0011, is the natural next check).
 - Does not resolve `docs/questions-for-upm.md` #2 (Lorca's own Navarro et
   al. 2014 microzonation) — that request stays open as a Lorca-specific
   validation reference (a finer source to compare ESRM20's coarser
   national grid against locally), not as a replacement for it.
-- `_MAX_LOOKUP_DISTANCE_DEG`'s `NaN`-on-no-coverage fallback means any
-  building far outside ESRM20's Spain extent (shouldn't happen for
-  mainland/Balearic/Canary buildings, unverified for Ceuta/Melilla —
-  worth checking given the existing Ceuta/Melilla Catastro-code caveats)
-  silently reverts to `DEFAULT_VS30` rather than erroring — consistent
-  with the project's "never crash on a data gap" posture elsewhere, but
-  worth a coverage check (`grid.query` distance histogram) before treating
-  Ceuta/Melilla numbers as trustworthy.
