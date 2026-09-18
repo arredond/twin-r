@@ -44,18 +44,13 @@ const SELECTED_OUTLINE_PAINT: maplibregl.ExpressionSpecification = [
 // static-tiling pattern as buildings above. A scenario run computes nothing
 // new for this layer -- it just sets each building's damage_state_code as
 // feature-state (below), same as the buildings layer, and the paint
-// expression shows only the rings at or under that code.
+// expression shows only the one ring matching that code (each ring's
+// geometry is cumulative -- 0m to the ring's own distance -- so the
+// matching ring already covers everything a lower ring would show).
 const DEBRIS_PMTILES_URL = import.meta.env.VITE_DEBRIS_PMTILES_URL ?? "/data/debris.pmtiles";
 const DEBRIS_SOURCE_ID = "debris";
 const DEBRIS_LAYER_ID = "debris-fill";
 const DEBRIS_OUTLINE_LAYER_ID = "debris-selected-outline";
-// One flat opacity for every shown ring -- a per-ring falloff (tried
-// first) made a single building's stacked rings 1..N read as concentric
-// bands of different shades rather than one debris field, and the same
-// partial alpha compounded further wherever neighboring buildings' rings
-// overlapped. A uniform, fully-opaque fill avoids both: rings from the
-// same building blend into each other (no visible seams) and an
-// overlapping neighbor's ring simply paints over rather than mixing.
 const DEBRIS_RING_OPACITY = 1;
 
 // Municipal boundaries (IGN/CNIG, see pipelines/exposure/src/exposure/
@@ -609,24 +604,22 @@ export function DamageMap({
         minzoom: BUILDING_DETAIL_MINZOOM,
         paint: {
           "fill-color": DEBRIS_COLOR,
-          // Every ring up to a building's *current* predicted damage state
-          // renders (ring 1 = Slight .. ring 4 = Complete, ADR-0010): the
-          // rings are real nested annuli around the building, not
-          // alternative shapes, so a Moderate-damage building's debris
-          // genuinely covers both its Slight (1) and Moderate (2) rings,
-          // not just the outer one. An earlier `==`-only version (showing
-          // just the ring matching the exact damage state) was based on a
-          // mistaken read of the rings as concentric alternatives rather
-          // than an accumulating footprint -- see DEBRIS_RING_OPACITY's own
-          // comment for the other half of that fix (flat opacity, so
-          // stacking rings 1..N doesn't itself look banded).
+          // Only the ring matching a building's *current* predicted damage
+          // state renders (ring 1 = Slight .. ring 4 = Complete, ADR-0010).
+          // Each ring's geometry is now the *cumulative* envelope out to
+          // that ring's distance (debris.py: "ring N always fully contains
+          // ring N-1"), not an annulus between two distances -- so the
+          // single ring matching the damage state already covers the same
+          // area stacking rings 1..N used to. Rendering every ring
+          // <= damage_state_code (an earlier version of this expression)
+          // would now just repaint the same pixels 1-4 times over.
           // ["feature-state", "damage_state_code"] is unset (null) for any
           // building no scenario has touched yet, so `coalesce` to -1
           // keeps every ring hidden by default rather than comparing
           // against null.
           "fill-opacity": [
             "case",
-            ["<=", ["get", "ring"], ["coalesce", ["feature-state", "damage_state_code"], -1]],
+            ["==", ["get", "ring"], ["coalesce", ["feature-state", "damage_state_code"], -1]],
             DEBRIS_RING_OPACITY,
             0,
           ],
