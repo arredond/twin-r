@@ -13,10 +13,17 @@ table (docs/merisur.md §4.8): ring 1 = Slight/1m ... ring 4 = Complete/4m.
 This lines up exactly with `DAMAGE_STATE_CODES` in
 services/scenario/src/scenario/response.py (None=0, Slight=1, ...,
 Complete=4) by construction, not coincidence -- a scenario's
-`damage_state_code` is meant to be used directly as "show every ring
-<= this number" at render time, so `ring` must equal the damage-state
-code it first becomes visible at. Changing one without the other breaks
-that contract.
+`damage_state_code` is meant to be used directly as "show the ring
+== this number" at render time, so `ring` must equal the damage-state
+code it becomes visible at. Changing one without the other breaks that
+contract.
+
+Each ring's geometry is *cumulative* (buffered out from the building's own
+footprint to that ring's distance), not an annulus between two ring
+distances -- ring N always fully contains ring N-1, and every ring's inner
+boundary is the building outline itself. The frontend renders exactly one
+ring (the one matching a building's damage state), not every ring
+<= that state, since a higher ring already covers the lower ones' area.
 """
 
 from __future__ import annotations
@@ -156,22 +163,23 @@ def compute_debris_envelopes(buildings: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
             if exterior_boundary.is_empty:
                 continue  # party-walled on every side, e.g. a mid-block interior unit
 
-            previous_cumulative = None
             for ring_number, distance in enumerate(RING_DISTANCES_M, start=1):
+                # Each ring is the *cumulative* debris envelope out to this
+                # damage state's distance, not the annulus between this
+                # distance and the previous one -- so ring N always fully
+                # contains ring N-1, and every ring's inner boundary is the
+                # building's own footprint (the `.difference(geom)` below),
+                # never a previous ring. This lets the frontend render just
+                # the one ring matching a building's actual damage state
+                # instead of stacking rings 1..damage_state_code.
                 cumulative = exterior_boundary.buffer(
                     distance, quad_segs=BUFFER_QUAD_SEGS
                 ).difference(geom)
                 if neighbors is not None:
                     cumulative = cumulative.difference(neighbors)
-                band = (
-                    cumulative
-                    if previous_cumulative is None
-                    else cumulative.difference(previous_cumulative)
-                )
-                previous_cumulative = cumulative
-                band = _polygonal_only(band)
-                if not band.is_empty:
-                    band = band.simplify(SIMPLIFY_TOLERANCE_M)
+                cumulative = _polygonal_only(cumulative)
+                if not cumulative.is_empty:
+                    cumulative = cumulative.simplify(SIMPLIFY_TOLERANCE_M)
                     # simplify() (even with its default preserve_topology)
                     # can still produce a self-touching/invalid polygon at
                     # this tolerance for a narrow enough sliver -- shapely
@@ -183,13 +191,13 @@ def compute_debris_envelopes(buildings: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
                     # relative to the buffering already done; re-run
                     # through the same polygonal-only filter since
                     # make_valid can, again, produce a GeometryCollection.
-                    if not band.is_valid:
-                        band = _polygonal_only(make_valid(band))
-                if band.is_empty:
+                    if not cumulative.is_valid:
+                        cumulative = _polygonal_only(make_valid(cumulative))
+                if cumulative.is_empty:
                     continue
                 out_building_id.append(building_ids[i])
                 out_ring.append(ring_number)
-                out_geom.append(band)
+                out_geom.append(cumulative)
         except (GEOSException, AttributeError, ValueError):
             # make_valid + _polygonal_only above handle the common defects;
             # this is a backstop for whatever they don't catch. Broader

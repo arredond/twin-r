@@ -24,16 +24,27 @@ def test_isolated_building_gets_rings_on_all_sides():
     assert 40 < ring1.area < 48
 
 
-def test_rings_are_nested_and_non_overlapping():
+def test_rings_are_cumulative_and_overlapping():
     gdf = _utm_gdf(["b1"], [box(0, 0, 10, 10)])
     result = compute_debris_envelopes(gdf).set_index("ring")
 
-    # Each successive ring's area should be roughly constant (same
-    # perimeter, same 1m band width) once you're past the corner rounding,
-    # not cumulative -- confirms bands aren't double-counted.
+    # Each ring is the full envelope out to its own distance, so ring N
+    # must fully contain ring N-1 (same inner boundary: the building
+    # footprint itself) and strictly grow in area.
+    building = box(0, 0, 10, 10)
     areas = [result.loc[r].geometry.area for r in range(1, 5)]
-    assert all(a > 0 for a in areas)
-    assert max(areas) / min(areas) < 1.5
+    assert areas == sorted(areas)
+    assert areas[0] < areas[-1]
+    for r in range(1, 5):
+        geom = result.loc[r].geometry
+        assert geom.intersection(building).area < 1e-6
+    for r in range(2, 5):
+        smaller = result.loc[r - 1].geometry
+        larger = result.loc[r].geometry
+        # `larger` contains (nearly) all of `smaller`'s area -- allow a
+        # small tolerance for simplify()/buffer() approximation.
+        overlap = smaller.intersection(larger).area
+        assert overlap / smaller.area > 0.95
 
 
 def test_party_wall_excludes_shared_edge():

@@ -41,7 +41,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import geopandas as gpd
@@ -479,13 +479,19 @@ def compute_debris_region(
     part already exists is skipped, not recomputed -- debris computation is
     real per-building GIS work (buffering, neighbor differencing), not just
     I/O, so unlike a re-download this is real CPU time worth not repeating.
-    Thread pool, not process pool, matching `crawl_region`'s own reasoning
-    for this pipeline's I/O-bound steps -- shapely/GEOS releases the GIL
-    during its own C calls, so this still parallelizes usefully even though
-    it's CPU-bound Python-loop-plus-C-calls rather than network I/O; not
-    verified against a process pool here, so if a future measurement shows
-    threads aren't actually buying parallelism for this specific step,
-    switching to `ProcessPoolExecutor` is the first thing to try.
+
+    Process pool, not thread pool -- unlike `crawl_region`'s I/O-bound
+    download+parse step, this stage is dominated by the per-building Python
+    loop in `compute_debris_envelopes` (candidate filtering, list-building
+    around each shapely call), which holds the GIL between the individual
+    GEOS calls that do release it. A thread pool measurably under-utilizes
+    multiple cores here; a process pool gives each municipality's
+    computation a genuinely separate interpreter. Each worker only ever
+    receives one municipality's `building_id`/`geometry` part path and
+    returns small scalars (ine_code, count, elapsed, error) -- the actual
+    GeoDataFrames stay in the worker process and are never pickled across
+    the process boundary, so this doesn't pay a serialization tax on the
+    geometry itself.
 
     Building geometry only (no other attributes) is read from each part --
     debris rings don't depend on floors/construction_year/etc, so there's
@@ -505,7 +511,7 @@ def compute_debris_region(
         raise ValueError(f"no buildings.parquet parts found in {parts_dir}")
 
     results: list[tuple[str, int, float, str | None]] = []
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+    with ProcessPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_compute_one_debris, p, parts_dir): p for p in building_parts}
         for i, future in enumerate(as_completed(futures), 1):
             ine_code, n_rings, elapsed, error = future.result()
