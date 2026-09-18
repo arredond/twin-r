@@ -32,7 +32,9 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import requests
-from scipy.spatial import cKDTree
+from scipy.spatial import (
+    cKDTree,  # pyrefly: ignore -- no stub for this compiled extension re-export
+)
 
 SPAIN_VS30_CSV_URL = (
     "https://gitlab.seismo.ethz.ch/efehr/esrm20/-/raw/main/"

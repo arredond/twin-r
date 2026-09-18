@@ -386,11 +386,17 @@ def crawl_navarra(raw_dir: str | Path, parts_dir: str | Path) -> tuple[str, int,
 def crawl_gipuzkoa(raw_dir: str | Path, parts_dir: str | Path) -> tuple[str, int, str | None]:
     """Download + parse the whole of Gipuzkoa (province 20) as one unit.
 
-    Gipuzkoa's WFS has no per-municipality breakdown either, and is
-    fetched as a set of bbox tiles rather than pages (see gipuzkoa.py) --
-    a building on a tile boundary can be returned by more than one tile,
-    so duplicates are dropped by `building_id` after concatenating, unlike
-    `crawl_navarra`'s plain concat.
+    Fetched via Gipuzkoa's bulk ATOM download (`gipuzkoa.download_bulk`/
+    `load_buildings_bulk`) -- one ~34MB zip, no bbox-tiling/pagination
+    workaround needed, unlike the live WFS this used to go through
+    (`gipuzkoa.download_pages`, kept in gipuzkoa.py for reference/fallback
+    only). This still writes one whole-territory part under a placeholder
+    code (`_GIPUZKOA_PART_CODE`), same as before -- the ATOM feed's own
+    `ad:adminUnit` municipality name is populated on only ~12% of
+    buildings, nowhere near complete enough to partition by directly (see
+    `municipality_crosswalk.rebuild_gipuzkoa_partitions`'s docstring),
+    so real per-municipality codes are still a separate post-crawl step,
+    same as Álava/Navarra.
 
     Returns (part_code, n_buildings, error).
     """
@@ -403,9 +409,8 @@ def crawl_gipuzkoa(raw_dir: str | Path, parts_dir: str | Path) -> tuple[str, int
         return (_GIPUZKOA_PART_CODE, -1, None)
 
     try:
-        tiles = gipuzkoa.download_pages(raw_dir)
-        buildings = _concat_buildings([load_inspire_bu_buildings(t) for t in tiles])
-        buildings = buildings.drop_duplicates(subset="building_id").reset_index(drop=True)
+        gml_path = gipuzkoa.download_bulk(raw_dir)
+        buildings = gipuzkoa.load_buildings_bulk(gml_path)
         buildings, exposure = build_exposure(buildings, "Gipuzkoa", _GIPUZKOA_PART_CODE)
         buildings.to_parquet(buildings_part)
         exposure.to_parquet(exposure_part, index=False)

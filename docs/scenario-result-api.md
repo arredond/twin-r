@@ -37,9 +37,13 @@ Both expose the same four routes:
   "evaluated_region": { "lat": ..., "lon": ..., "radius_km": ... },
   "buildings": [ { "building_id": ..., "damage_state_code": 0-4, "prob_none": ..., "prob_slight": ..., "prob_moderate": ..., "prob_extensive": ..., "prob_complete": ... }, ... ],
   "n_evaluated": <int>,
+  "elapsed_ms": <float>,
   "municipality_stats": [ { "municipality_code": ..., "n_evaluated": ..., "counts": {...} }, ... ]
 }
 ```
+
+`elapsed_ms` is only added by `local.py` (server-side compute time, for dev-time
+observability); `handler.py`'s Lambda payload doesn't include it.
 
 Two things already trim this down a lot (`response.py`, well-commented in
 place, worth reading directly):

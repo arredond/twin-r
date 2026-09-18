@@ -39,7 +39,7 @@ plane geometry -- hazardlib already implements Rjb (and Rrup/Rx, if ever
 needed) correctly for a surface built this way.
 
 `Rupture` (rupture.py) gains an optional `surface` field. When present,
-`ground_motion.compute_sa03` computes Rjb via
+`ground_motion.compute_intensity` computes Rjb via
 `surface.get_joyner_boore_distance(mesh)` instead of the geodesic
 point-to-point approximation. `None` (manual mode, or any automatic-mode
 fault whose geometry hazardlib rejects) keeps the point-source fallback

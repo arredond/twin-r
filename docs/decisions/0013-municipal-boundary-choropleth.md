@@ -1,6 +1,13 @@
 # ADR-0013: Municipal-boundary choropleth for low-zoom scenario review
 
-Status: accepted
+Status: accepted. **The spatial-join implementation described below (the
+DuckDB `ST_Contains` join) was replaced by
+[ADR-0014](./0014-municipality-code-column-replaces-per-request-spatial-join.md)**
+after it caused a request-time regression; `compute_municipality_stats` is
+now a plain `groupby` on a precomputed `municipality_code` column, not a
+per-request spatial join. The choropleth decision itself (boundary source,
+code-join derivation, data-driven visibility filtering) is unaffected and
+still describes current behaviour.
 
 ## Context
 

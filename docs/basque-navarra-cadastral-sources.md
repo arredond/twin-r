@@ -35,7 +35,7 @@ crawler; all four are implemented now, each with its own module.
 |---|---|---|---|
 | Álava (01) | Diputación Foral de Álava, `geo.araba.eus` | Single bulk GML zip, whole territory, standard INSPIRE ATOM | **Implemented** (`alava.py`) |
 | Navarra (31) | Gobierno de Navarra / IDENA, `inspire.navarra.es` | Live WFS, paged with the server's own `next` link | **Implemented** (`navarra.py`) |
-| Guipúzcoa (20) | Diputación Foral de Gipuzkoa, `b5m.gipuzkoa.eus` | Live WFS (`b5m.gipuzkoa.eus/inspire/wfs/gipuzkoa_wfs_bu`), no `next` link -- fetched as adaptive bbox tiles instead (see its section below) | **Implemented** (`gipuzkoa.py`) |
+| Guipúzcoa (20) | Diputación Foral de Gipuzkoa, `b5m.gipuzkoa.eus` | Bulk ATOM download, one whole-territory zip (a live WFS also exists, kept as reference/fallback -- see its section below) | **Implemented** (`gipuzkoa.py`) |
 | Vizcaya (48) | Diputación Foral de Bizkaia, `geo.bizkaia.eus` (ArcGIS Server WFS, **not** an INSPIRE service) | Live WFS with a real `Municipios` feature type + OGC filter support -- true per-municipality queries | **Implemented** (`vizcaya.py`) |
 
 ## Findings, per territory
@@ -74,10 +74,11 @@ crawler; all four are implemented now, each with its own module.
   - No floor-area attribute exists on this schema's Building feature at
     all (only height above ground, in metres) -- `floor_area_m2` is left
     unpopulated rather than guessed at from a different quantity.
-- Implemented as `inspire_bu.load_buildings()` (shared with Navarra and
-  Gipuzkoa below, all three being the same schema family) producing the
-  same output schema `parse.py`'s Catastro loader does, so it still feeds
-  the existing taxonomy/tiling/scenario code unchanged downstream.
+- Implemented as `inspire_bu.load_buildings()` (shared with Navarra,
+  same schema family -- Gipuzkoa's actual crawl uses its own bulk-ATOM
+  loader instead, see its section below) producing the same output
+  schema `parse.py`'s Catastro loader does, so it still feeds the
+  existing taxonomy/tiling/scenario code unchanged downstream.
 - No per-municipality crawl needed at all — one small bulk download for
   the whole province, much simpler than Catastro's own per-municipality
   ATOM crawl (ADR-0005). Verified end-to-end this session: all 52
@@ -107,27 +108,34 @@ crawler; all four are implemented now, each with its own module.
 
 ### Guipúzcoa — implemented (`gipuzkoa.py`)
 
-- `b5m.gipuzkoa.eus` publishes a live Buildings WFS at
-  `https://b5m.gipuzkoa.eus/inspire/wfs/gipuzkoa_wfs_bu` (confirmed live
-  this session via plain `curl` — an earlier session's browser-based check
-  apparently hit something that didn't render, not an actual outage).
-  Type name `bu-ext2d:Building`; same `bu-base` schema family as
-  Álava/Navarra, wrapped in a Gipuzkoa-specific `bu-ext2d` extension
-  (extra address/document/valuation fields `inspire_bu.py` doesn't need).
-- Unlike Navarra's WFS, this one returns no `next` link, and its
-  `startIndex` is a plain unindexed row-skip: response time grows with the
-  offset itself (verified: 0ms-ish at `startindex=0`, ~0.6s at 100, ~4.8s
-  at 1000, times out past 40s beyond ~10000) — paging the whole ~124k-
-  feature territory this way is not viable, and would be inconsiderate to
-  a public server regardless.
-- `gipuzkoa.py` instead recursively quarters the territory's bounding box
-  (a `bbox` filter's `resulttype=hits` count is fast regardless of extent —
-  verified: ~1.4s for the *entire* territory) until each tile's count is
-  safely under the 5000/request page cap, then fetches each leaf tile in
-  one un-paged request. Verified this session: 70 leaf tiles, ~14s total
-  to compute the tiling, ~124k buildings covered with a small (~3%)
-  boundary-overlap duplication that `region.py`'s `crawl_gipuzkoa`
-  deduplicates by `building_id` after concatenating.
+- `region.py`'s `crawl_gipuzkoa` crawls Gipuzkoa via `b5m.gipuzkoa.eus`'s
+  bulk ATOM download service (`gipuzkoa.download_bulk`/
+  `load_buildings_bulk`): one predefined ~34MB zip covering the whole
+  territory (~124k buildings), no pagination or tiling needed at all.
+  Its GML carries a real `ad:adminUnit` municipality name (Spanish and
+  Basque spellings both given) — but only on ~12% of buildings, nowhere
+  near complete enough to partition the crawl by directly, so
+  `crawl_gipuzkoa` still writes one province-wide placeholder-coded part
+  (`20000`), same as Navarra. Real per-municipality codes are assigned
+  afterward by `municipality_crosswalk.rebuild_gipuzkoa_partitions`,
+  which does a direct per-building spatial join against IGN's
+  municipality polygons (every building already has real geometry, so no
+  grouping key is needed).
+- `b5m.gipuzkoa.eus` also publishes a live Buildings WFS at
+  `https://b5m.gipuzkoa.eus/inspire/wfs/gipuzkoa_wfs_bu` (type name
+  `bu-ext2d:Building`; same `bu-base` schema family as Álava/Navarra,
+  wrapped in a Gipuzkoa-specific `bu-ext2d` extension). `gipuzkoa.py`
+  keeps a WFS-based path (`download_pages`) for reference/fallback, but
+  it's no longer what `crawl_gipuzkoa` uses — this WFS returns no `next`
+  link, and its `startIndex` is a plain unindexed row-skip whose response
+  time grows with the offset itself (verified: 0ms-ish at
+  `startindex=0`, ~0.6s at 100, ~4.8s at 1000, times out past 40s beyond
+  ~10000), needing a recursive bbox-quartering workaround just to page
+  the whole territory in small-enough requests, and its own per-building
+  response carries no municipality name or code at all — only a
+  map-viewer URL whose `id` is Gipuzkoa's internal per-municipality
+  identifier, a URL-parsing hack rather than a real field. The bulk ATOM
+  download needs none of that.
 
 ### Vizcaya — implemented (`vizcaya.py`)
 
@@ -196,14 +204,21 @@ own flat-but-differently-named profile again) that a single loader
 covering all of them would have stopped being readable:
 
 - `inspire_bu.py` -- one shared loader for the INSPIRE bu-base/bu-core2d
-  schema family (Álava, Navarra, Gipuzkoa all share it, just under
-  different namespace prefixes and with minor per-source field-name
-  differences the loader tries in order). Produces the exact same output
-  schema as `parse.py`'s Catastro loader, so `pipeline.build_exposure`
-  (split out of `process_municipality` for this reason),
-  `taxonomy.assign_taxonomy`, and everything in `tile.py`/`region.py`
-  downstream work unchanged regardless of which loader produced a given
-  municipality's buildings.
+  schema family (Álava and Navarra share it, plus Gipuzkoa's own
+  WFS-based fallback path -- `gipuzkoa.py`'s bulk-ATOM path used for the
+  actual crawl has its own loader instead, see below). Produces the
+  exact same output schema as `parse.py`'s Catastro loader, so
+  `pipeline.build_exposure` (split out of `process_municipality` for
+  this reason), `taxonomy.assign_taxonomy`, and everything in
+  `tile.py`/`region.py` downstream work unchanged regardless of which
+  loader produced a given municipality's buildings.
+- `gipuzkoa.py`'s `load_buildings_bulk` -- its own loader for the bulk
+  ATOM download's GML, stream-parsed via `ElementTree.iterparse` rather
+  than reusing `inspire_bu.py`, since it also needs to pull the
+  `ad:adminUnit` municipality name (INSPIRE Addresses, not Buildings)
+  that `inspire_bu.py`'s flattening wouldn't capture. Still produces the
+  same shared output schema, plus an extra `admin_name` column consumed
+  by `municipality_crosswalk.rebuild_gipuzkoa_partitions`.
 - `vizcaya.py` has its own `load_buildings()` instead of using
   `inspire_bu.py` -- its ArcGIS Server WFS is a genuinely different
   schema (flat `Codigo_Uso`/`Ano_Constr`/`Numero_Alt`/`Numero_Viv`
@@ -215,11 +230,13 @@ covering all of them would have stopped being readable:
   GML), but each adapted to its source's actual access pattern rather
   than forcing all four into Catastro's per-municipality-zip mold: Álava
   is one bulk zip (already split by municipality inside), Navarra pages
-  through the whole territory via its WFS's own `next` link, Gipuzkoa
-  recursively tiles the territory's bounding box (its WFS has no `next`
-  link and an unindexed, offset-position-dependent `startIndex` that
-  makes plain paging impractical past a few thousand rows), and Vizcaya
-  queries its WFS per real municipality via an OGC filter on `Codigo_Mun`
+  through the whole territory via its WFS's own `next` link, Gipuzkoa is
+  also one bulk zip via its ATOM download service (its WFS fallback, if
+  ever needed, recursively tiles the territory's bounding box instead --
+  that WFS has no `next` link and an unindexed, offset-position-dependent
+  `startIndex` that makes plain paging impractical past a few thousand
+  rows), and Vizcaya queries its WFS per real municipality via an OGC
+  filter on `Codigo_Mun`
   (this server's `startIndex` is flat-cost regardless of offset, so plain
   paging is fine within one municipality — see each section above).
 - `region.py`'s `crawl_alava`/`crawl_navarra`/`crawl_gipuzkoa`/

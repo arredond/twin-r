@@ -20,7 +20,9 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
-from scipy.spatial import cKDTree
+from scipy.spatial import (
+    cKDTree,  # pyrefly: ignore -- no stub for this compiled extension re-export
+)
 
 from .parse import add_spatial_index_columns
 from .vs30 import add_vs30_column, build_vs30_lookup, fetch_spain_vs30_grid

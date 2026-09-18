@@ -3,7 +3,8 @@ Gipuzkoa -- Gipuzkoa (province 20) runs a separate Foral cadastral
 system, entirely outside the national Catastro feed `catastro.py` crawls
 (see docs/basque-navarra-cadastral-sources.md).
 
-Two access paths exist, and this module now uses the second:
+Two access paths exist. `region.py`'s `crawl_gipuzkoa` uses the second
+(the bulk ATOM download) as of this module's current version:
 
 - **The live WFS** (`WFS_URL`/`download_pages` below, kept for
   reference/fallback): doesn't hand back a `next` link, so paging has to

@@ -35,7 +35,7 @@ real near-fault buildings past the near end.
 
 Once those were fixed, a further profiling pass showed the exact
 (mesh × sites) distance calculation was still ~95% of remaining per-request
-time (Peñacova: 6.6s of 6.94s in `compute_sa03`), because it's inherent to
+time (Peñacova: 6.6s of 6.94s in `compute_intensity`), because it's inherent to
 evaluating millions of buildings against a real fault-surface mesh, not
 wasted work on filtered-out buildings -- 99%+ of sites in the pre-filter
 box already exceed the GMPE significance threshold that derives the box in
@@ -54,7 +54,7 @@ sizes.
 long faults, independent of the performance fix above.
 
 **3. Compute ground motion once per ~1km grid cell, not once per building**
-(`ground_motion.compute_sa03_gridded`, `SA_GRID_CELL_KM = 1.0`, used by
+(`ground_motion.compute_intensity_gridded`, `SA_GRID_CELL_KM = 1.0`, used by
 `engine.run_scenario`). SA(0.3s) barely varies over a span this small at
 regional distances -- finer, in fact, than the fault surface's own already-
 accepted `DEFAULT_MESH_SPACING_KM = 2.0` (ADR-0007). Real Spanish exposure
