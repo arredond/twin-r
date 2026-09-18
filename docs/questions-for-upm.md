@@ -50,14 +50,31 @@ currently omits entirely (flat reference-rock Vs30 everywhere). This is one
 of the "other simplifications" flagged as a contributor in our 2011
 validation run.
 
+**Update, partially superseding the original ask below:** since this
+question was first written, we adopted a **national** Vs30 source instead
+of waiting on a Lorca-only one — [ADR-0015](./decisions/0015-eshm20-site-amplification.md)
+integrates the ESRM20 (European Seismic Risk Model 2020) Vs30 grid
+(EFEHR/SED-ETH Zürich, CC BY 4.0), which covers all of Spain at ~30
+arc-second resolution and plugs directly into the Akkar et al. (2014)
+GMPE's existing site term. Checked directly at Lorca's town centre: it
+already gives a soft-soil value (~383 m/s) in the right direction vs. our
+previous flat 800 m/s default, and moves SA(0.3s) for the real 2011
+rupture up ~55%. This *doesn't* replace the value of Navarro et al.
+(2014)'s own microzonation — ESRM20 is a coarse, proxy-inferred national
+grid, not a real geophysical survey — so the ask below stands, just
+reframed: it's now a **validation reference** to check our national
+source's accuracy against for the one place we can, not the only path to
+having site amplification at all.
+
 **Question:** Is the microzonation itself (polygon boundaries + amplification
 factors per class) available to share, even just for Lorca as a reference/
 validation case?
 
-**What we'd do with it:** Add site amplification to the Lorca scenario as a
-validation exercise, before deciding how to generalize site effects
-nationally (where we already know we can't reuse Lorca's own
-microzonation — see `milestone-1-plan.md` §2).
+**What we'd do with it:** Compare ESRM20's inferred Vs30/amplification
+against Navarro et al.'s real microzonation specifically over Lorca, to
+put an actual error bar on how much the national proxy-based source is
+costing us in accuracy, before deciding whether a similar effort is worth
+it elsewhere.
 
 ## Medium priority
 

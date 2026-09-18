@@ -1,9 +1,14 @@
 """Ground motion: Akkar, Sandıkkaya & Bommer (2014) GMPE via openquake.hazardlib.
 
 See docs/merisur.md §4.2 for why this is the right GMPE to match MERISUR's
-own chain, and docs/milestone-1-plan.md §2 for why we skip Lorca's soil
-microzonation (not public, not portable) in favour of a flat reference-rock
-Vs30 for the MVP.
+own chain. `vs30` here can be a scalar (the flat `DEFAULT_VS30` reference-
+rock fallback, docs/milestone-1-plan.md §2's original MVP simplification)
+or a per-site array -- see ADR-0015
+(docs/decisions/0015-eshm20-site-amplification.md) and `pipelines/exposure/
+vs30.py` for where a real per-building value comes from (ESRM20's national
+Vs30 grid) and `DEFAULT_VS30` remains the fallback for any site that
+lookup hasn't reached yet (missing column, or a NaN from
+`vs30.lookup_vs30` falling outside the grid's coverage).
 
 Computes whichever intensity measure a caller asks for (`imt`), not a single
 hardcoded one -- the vendored fragility curves (pipelines/fragility) are
@@ -84,7 +89,7 @@ def _intensity_at_distances(
     rupture: Rupture,
     rjb_km: np.ndarray,
     imt: IMT,
-    vs30: float,
+    vs30: float | np.ndarray,
     sigma_multiplier: float = 0.0,
 ) -> np.ndarray:
     """`imt`, in g, at each given Rjb distance (km) for this rupture.
@@ -127,7 +132,7 @@ def compute_intensity(
     lats: np.ndarray,
     lons: np.ndarray,
     imt: IMT,
-    vs30: float = DEFAULT_VS30,
+    vs30: float | np.ndarray = DEFAULT_VS30,
     sigma_multiplier: float = 0.0,
 ) -> np.ndarray:
     """Return `imt`, in g, at each (lat, lon) site for this rupture.
@@ -137,7 +142,9 @@ def compute_intensity(
     distance to `rupture`'s point location (rupture.py's point-source
     simplification) when it's not, which is always the case for manual-mode
     ruptures and rare for automatic-mode ones (only if hazardlib rejected
-    that fault's geometry). `sigma_multiplier`: see `_intensity_at_distances`.
+    that fault's geometry). `vs30` may be a scalar or a per-site array of
+    the same length as `lats`/`lons` (ADR-0015). `sigma_multiplier`: see
+    `_intensity_at_distances`.
     """
     n = len(lats)
     if n == 0:
@@ -178,7 +185,7 @@ def compute_intensity_gridded(
     lats: np.ndarray,
     lons: np.ndarray,
     imt: IMT,
-    vs30: float = DEFAULT_VS30,
+    vs30: float | np.ndarray = DEFAULT_VS30,
     cell_km: float = SA_GRID_CELL_KM,
     sigma_multiplier: float = 0.0,
 ) -> np.ndarray:
@@ -188,7 +195,15 @@ def compute_intensity_gridded(
     Each building keeps its own row in the caller's result (this only
     dedupes the expensive intermediate calculation) -- taxonomy/height-
     specific fragility lookups downstream still run per building as usual.
-    `sigma_multiplier`: see `_intensity_at_distances`.
+
+    When `vs30` is a per-site array (ADR-0015), every site in a cell gets
+    the *representative* site's Vs30 (the same site whose lat/lon already
+    stands in for the whole cell, `first_index` below), not its own --
+    consistent with the existing lat/lon approximation this function
+    already makes, and a reasonable one here specifically because
+    `cell_km` (1km) is close to the source grid's own ~30 arc-second
+    (~0.8km) spacing, so a cell rarely spans more than one or two grid
+    points to begin with. `sigma_multiplier`: see `_intensity_at_distances`.
     """
     n = len(lats)
     if n == 0:
@@ -213,8 +228,11 @@ def compute_intensity_gridded(
     _, first_index, inverse = np.unique(keys, return_index=True, return_inverse=True)
     cell_lats = (cell_row[first_index] + 0.5) * deg_lat
     cell_lons = (cell_col[first_index] + 0.5) * deg_lon
+    cell_vs30 = vs30[first_index] if isinstance(vs30, np.ndarray) else vs30
 
-    cell_intensity = compute_intensity(rupture, cell_lats, cell_lons, imt, vs30, sigma_multiplier)
+    cell_intensity = compute_intensity(
+        rupture, cell_lats, cell_lons, imt, cell_vs30, sigma_multiplier
+    )
     return cell_intensity[inverse]
 
 
