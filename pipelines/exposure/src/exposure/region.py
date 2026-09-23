@@ -442,6 +442,55 @@ def combine_exposure(parts_dir: str | Path, exposure_output: str | Path) -> pd.D
     return combined
 
 
+def compact_buildings_for_cloud(parts_dir: str | Path, output: str | Path) -> int:
+    """Combine every municipality's buildings part into one spatially-sorted
+    parquet, columns trimmed to just what `scenario.engine._load_sites`
+    actually queries (building_id/centroid_lon/centroid_lat/
+    municipality_code/vs30 -- no geometry, no floors/construction_year/
+    current_use/num_dwellings; those live in the PMTiles layer the frontend
+    already renders from, or in exposure.parquet).
+
+    `parts_dir` stays partitioned one-file-per-municipality for the crawl's
+    own resumability (region.py's module docstring) -- this is a separate
+    *cloud-serving* artifact, built once the crawl is done, not a
+    replacement for the parts glob local dev still reads.
+
+    Why this matters: local dev reads the `*.buildings.parquet` glob off
+    disk, where opening ~8000 small files is cheap. Over S3 each file open
+    is a network round trip, so the same glob against a cloud bucket is
+    latency-bound rather than data-bound -- thousands of small GETs instead
+    of one. `exposure.parquet` sidesteps this by being combined already;
+    this does the same for buildings, plus sorts rows by centroid_lon then
+    centroid_lat so DuckDB's row-group min/max stats cluster geographically
+    -- a bounding-box query (engine.py's `_load_sites`) then range-GETs only
+    the row groups that overlap it, rather than scanning the whole file.
+
+    Returns the row count written.
+    """
+    import duckdb
+
+    con = duckdb.connect()
+    parts_glob = str(Path(parts_dir) / "*.buildings.parquet")
+    output = str(output)
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
+    # DuckDB's COPY doesn't accept a parameter binding for the target path,
+    # so it's interpolated directly -- `output` is a caller-controlled local
+    # path (a pipeline CLI arg), never untrusted/web input.
+    con.execute(
+        f"""
+        COPY (
+            SELECT building_id, centroid_lon, centroid_lat, municipality_code, vs30
+            FROM read_parquet(?)
+            ORDER BY centroid_lon, centroid_lat
+        ) TO '{output}' (FORMAT PARQUET, ROW_GROUP_SIZE 200000)
+        """,
+        [parts_glob],
+    )
+    row = con.execute("SELECT COUNT(*) FROM read_parquet(?)", [output]).fetchone()
+    assert row is not None  # COUNT(*) always returns exactly one row
+    return row[0]
+
+
 def _debris_part_path(parts_dir: Path, ine_code: str) -> Path:
     return parts_dir / f"{ine_code}.debris.parquet"
 

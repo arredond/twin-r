@@ -3,6 +3,8 @@
 interface ImportMetaEnv {
   readonly VITE_SCENARIO_API_URL?: string;
   readonly VITE_BUILDINGS_PMTILES_URL?: string;
+  readonly VITE_DEBRIS_PMTILES_URL?: string;
+  readonly VITE_MUNICIPALITIES_PMTILES_URL?: string;
 }
 
 interface ImportMeta {

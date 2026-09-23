@@ -13,8 +13,9 @@ simplification (see rupture.py) -- just a better-placed point.
 
 from __future__ import annotations
 
-import duckdb
 import pandas as pd
+
+from .db import ensure_httpfs, ensure_spatial, get_connection
 
 
 def load_nearby_faults(
@@ -31,8 +32,10 @@ def load_nearby_faults(
     away" sort/display uses), distance_km, geometry_geojson (the full fault
     trace, for map display and surface construction).
     """
-    con = duckdb.connect()
-    con.execute("INSTALL spatial; LOAD spatial;")
+    con = get_connection()
+    if faults_path.startswith("s3://"):
+        ensure_httpfs(con)
+    ensure_spatial(con)
     df = con.execute(
         """
         WITH site AS (SELECT ST_Point(?, ?) AS pt),

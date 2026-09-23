@@ -63,10 +63,23 @@ export default function App() {
   // lists faults nearest-first relative to the current view instead of a
   // fixed reference point. mapCenter starts at this same near-Madrid
   // default, so the very first fetch already matches it.
+  //
+  // Debounced: `onMapMove` passes a fresh {lat, lon} object on every
+  // `moveend` MapLibre fires, including ones from the map's own initial
+  // camera setup (not just real user pans) -- undebounced, a burst of
+  // those each independently triggered a `/faults` fetch, and against the
+  // deployed Lambda (docs/known-issues-cloud-deploy.md) each one could be
+  // its own multi-second cold start, stacking into a pile of concurrent
+  // requests right after page load. 400ms is short enough to feel
+  // instant after a real pan settles, long enough to collapse a startup
+  // burst into one fetch.
   useEffect(() => {
-    listFaults(mapCenter.lat, mapCenter.lon)
-      .then(setFaults)
-      .catch((e) => setFaultsError(e instanceof Error ? e.message : String(e)));
+    const timeout = setTimeout(() => {
+      listFaults(mapCenter.lat, mapCenter.lon)
+        .then(setFaults)
+        .catch((e) => setFaultsError(e instanceof Error ? e.message : String(e)));
+    }, 400);
+    return () => clearTimeout(timeout);
   }, [mapCenter]);
 
   async function runScenario(run: () => Promise<ScenarioResult>) {

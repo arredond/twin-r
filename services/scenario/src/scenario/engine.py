@@ -24,6 +24,7 @@ import duckdb
 import pandas as pd
 
 from .damage import evaluate_damage_batch
+from .db import ensure_httpfs, get_connection
 from .fragility_lookup import FragilityTable
 from .ground_motion import (
     DEFAULT_VS30,
@@ -62,7 +63,7 @@ def _load_sites(
         # httpfs + DuckDB's default AWS credential chain (picks up the
         # Lambda execution role automatically) -- no explicit credentials
         # wired here, matching S3 access via IAM rather than secrets.
-        con.execute("INSTALL httpfs; LOAD httpfs;")
+        ensure_httpfs(con)
 
     # A simple lat/lon degree bounding box, not a true geodesic radius --
     # cheap to evaluate and generous enough (longitude degrees narrow
@@ -187,7 +188,7 @@ def run_scenario(
             rupture, sigma_multiplier=sigma_multiplier
         )
 
-    con = duckdb.connect()
+    con = get_connection()
     sites = _load_sites(con, buildings_path, exposure_path, rupture, max_distance_km)
     if sites.empty:
         return pd.DataFrame(columns=_RESULT_COLUMNS)

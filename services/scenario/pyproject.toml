@@ -6,6 +6,12 @@ requires-python = ">=3.12"
 dependencies = [
     "duckdb>=1.1",
     "openquake.engine>=3.19",
+    # Not imported directly by this package, but openquake.hazardlib's
+    # gsim.zhao_2016 does `import fiona` unconditionally at module load
+    # (it's optional in OpenQuake's own requirements but not guarded with
+    # a graceful fallback here) -- dropping it breaks every scenario run,
+    # not just GDAL-based fault/exposure parsing (which lives in
+    # pipelines/, not here). Confirmed by running the test suite.
     "fiona>=1.9",
     "numpy>=1.26",
     "pyarrow>=17.0",

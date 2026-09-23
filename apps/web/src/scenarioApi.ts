@@ -105,6 +105,24 @@ export interface ScenarioResult {
   municipality_stats: MunicipalityStats[];
 }
 
+// The deployed Lambda writes large results to S3 instead of returning them
+// inline (a Function URL's default BUFFERED invoke mode caps responses at
+// 6MB -- see handler.py's `_write_to_s3`/`_response`), and hands back
+// `{ result_url: <presigned HTTPS URL> }` instead of a ScenarioResult
+// directly. The local dev server (local.py) never does this -- it always
+// returns the ScenarioResult inline -- so this has to handle both shapes.
+async function resolveScenarioResult(body: unknown): Promise<ScenarioResult> {
+  if (body && typeof body === "object" && "result_url" in body) {
+    const resultUrl = (body as { result_url: string }).result_url;
+    const resp = await fetch(resultUrl);
+    if (!resp.ok) {
+      throw new Error(`fetching scenario result failed (${resp.status}): ${await resp.text()}`);
+    }
+    return resp.json();
+  }
+  return body as ScenarioResult;
+}
+
 async function postScenario(path: string, body: unknown): Promise<ScenarioResult> {
   const resp = await fetch(`${API_URL}${path}`, {
     method: "POST",
@@ -115,7 +133,7 @@ async function postScenario(path: string, body: unknown): Promise<ScenarioResult
     const detail = await resp.text();
     throw new Error(`scenario request failed (${resp.status}): ${detail}`);
   }
-  return resp.json();
+  return resolveScenarioResult(await resp.json());
 }
 
 async function getScenario(path: string, params: Record<string, string | number>): Promise<ScenarioResult> {
@@ -125,7 +143,7 @@ async function getScenario(path: string, params: Record<string, string | number>
     const detail = await resp.text();
     throw new Error(`scenario request failed (${resp.status}): ${detail}`);
   }
-  return resp.json();
+  return resolveScenarioResult(await resp.json());
 }
 
 export function runManualScenario(req: ManualRuptureRequest): Promise<ScenarioResult> {

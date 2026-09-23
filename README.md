@@ -102,6 +102,14 @@ uv run pytest              # all Python packages
 cd apps/web && npx tsc --noEmit && npm run build
 ```
 
+## Cloud deployment
+
+See [`docs/decisions/0016-cloud-deployment.md`](docs/decisions/0016-cloud-deployment.md)
+for the architecture (AWS Lambda + S3 backend, Cloudflare Pages frontend),
+[`docs/deploy-aws-setup.md`](docs/deploy-aws-setup.md) for AWS account
+setup + `cdk deploy` + data upload, and
+[`docs/deploy-cloudflare.md`](docs/deploy-cloudflare.md) for the frontend.
+
 ## Dev tooling
 
 - **Linting/formatting**: [`ruff`](https://docs.astral.sh/ruff/) (`uv run ruff check .`, `uv run ruff format .`).

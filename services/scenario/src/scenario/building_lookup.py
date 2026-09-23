@@ -9,15 +9,16 @@ DuckDB point lookup rather than a full re-tile just to add two fields).
 
 from __future__ import annotations
 
-import duckdb
 import pandas as pd
+
+from .db import ensure_httpfs, get_connection
 
 
 def get_building(exposure_path: str, building_id: str) -> pd.Series | None:
     """One building's exposure row, or None if the id isn't found."""
-    con = duckdb.connect()
+    con = get_connection()
     if exposure_path.startswith("s3://"):
-        con.execute("INSTALL httpfs; LOAD httpfs;")
+        ensure_httpfs(con)
     df = con.execute(
         "SELECT * FROM read_parquet(?) WHERE building_id = ?",
         [exposure_path, building_id],
