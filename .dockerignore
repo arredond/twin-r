@@ -1,0 +1,19 @@
+# The scenario Lambda's image (services/scenario/Dockerfile) builds with
+# the repo root as context -- needed so it can also COPY services/tiles
+# (a sibling package, see that Dockerfile's own comment on why). Without
+# this file, `docker build` would try to send the *entire* repo as build
+# context first, including data/ and apps/web/public/data (symlinks to the
+# main worktree's multi-GB pipeline outputs, see bin/link-data) -- slow at
+# best, likely to fail outright at that size. Only services/scenario/ and
+# services/tiles/ are ever actually COPY'd, so everything else is safe to
+# exclude here regardless of what a future Dockerfile might add, as long
+# as it's kept in sync with what it COPYs.
+data/
+apps/web/public/data/
+apps/web/node_modules/
+apps/web/dist/
+.git/
+.venv/
+**/__pycache__/
+**/*.pyc
+infra/cdk.out/

@@ -21,8 +21,9 @@ from aws_cdk import aws_s3 as s3
 from aws_cdk.aws_lambda_python_alpha import PythonFunction
 from constructs import Construct
 
-SCENARIO_SERVICE_DIR = Path(__file__).resolve().parents[2] / "services" / "scenario"
-TILES_SERVICE_DIR = Path(__file__).resolve().parents[2] / "services" / "tiles"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCENARIO_SERVICE_DIR = REPO_ROOT / "services" / "scenario"
+TILES_SERVICE_DIR = REPO_ROOT / "services" / "tiles"
 
 # The Cloudflare Pages frontend origin, allowed to fetch PMTiles/parquet
 # directly out of the data bucket (browser range requests -- see
@@ -108,7 +109,17 @@ class TwinRStack(Stack):
             self,
             "ScenarioFunction",
             code=lambda_.DockerImageCode.from_image_asset(
-                str(SCENARIO_SERVICE_DIR),
+                # Repo root, not SCENARIO_SERVICE_DIR -- the image also
+                # needs services/tiles (results_store.py, imported by
+                # handler.py's compute path to write S3 results the tiles
+                # Lambda reads back), a sibling directory Docker can't see
+                # if the build context is scoped to services/scenario/
+                # alone (confirmed the hard way: an earlier build without
+                # this pointed the context at services/scenario/ only,
+                # and every scenario request failed at runtime with
+                # `ModuleNotFoundError: No module named 'tiles'`).
+                str(REPO_ROOT),
+                file="services/scenario/Dockerfile",
                 # Without this, `docker build` targets the host machine's
                 # own architecture -- fine on an x86_64 CI runner, but on
                 # Apple Silicon it builds a linux/arm64 image. fiona (a
