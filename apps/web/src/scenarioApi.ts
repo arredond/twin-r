@@ -2,8 +2,11 @@ import type { DamageState } from "./damageColors";
 
 // Client for the scenario function (services/scenario). Defaults to the
 // local dev server (uvicorn scenario.local:app); override via
-// VITE_SCENARIO_API_URL for a deployed Lambda Function URL.
-const API_URL = import.meta.env.VITE_SCENARIO_API_URL ?? "http://localhost:8000";
+// VITE_SCENARIO_API_URL for a deployed Lambda Function URL. Exported: also
+// used by DamageMap.tsx to build the per-scenario tile-join URL template
+// (GET /tiles/{scenario_id}/{z}/{x}/{y}.mvt), the same base every other
+// request here goes through.
+export const API_URL = import.meta.env.VITE_SCENARIO_API_URL ?? "http://localhost:8000";
 
 // MERISUR's three selectable scenario probability levels
 // (services/scenario/probability_level.py, docs/merisur.md §4.7): "high"

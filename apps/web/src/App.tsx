@@ -213,6 +213,7 @@ export default function App() {
       <main style={{ flex: 1 }}>
         <DamageMap
           results={result?.buildings ?? null}
+          scenarioId={result?.scenario_id ?? null}
           municipalityStats={result?.municipality_stats ?? []}
           evaluatedRegion={result?.evaluated_region ?? null}
           faults={faults}

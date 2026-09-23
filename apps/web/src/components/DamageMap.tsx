@@ -6,6 +6,7 @@ import { Protocol } from "pmtiles";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { DAMAGE_COLORS, DAMAGE_STATES, DEBRIS_COLOR } from "../damageColors";
 import {
+  API_URL,
   getBuildingInfo,
   type BuildingDamageResult,
   type EvaluatedRegion,
@@ -15,10 +16,15 @@ import {
 
 // Precomputed-tiling architecture (docs/decisions/0003-precomputed-building-tiles.md):
 // building geometry is a static PMTiles layer, tiled once offline by the
-// exposure pipeline. Scenario results never touch tiling -- we join the
-// thin per-building result onto this static layer at render time via
-// MapLibre's setFeatureState, keyed by building_id (promoted as the tile
-// feature id below).
+// exposure pipeline. Once a scenario has run, its own results are joined
+// onto that geometry server-side, one tile at a time, by
+// services/scenario/tile_join.py -- each `buildings` feature comes back
+// with `damage_state_code`/`prob_*` already attached when this scenario
+// touched that building, so the frontend never needs to fetch a
+// building_id list and setFeatureState it in one-by-one (the previous
+// design, which didn't scale past ~100k affected buildings). Before any
+// scenario has run, the map falls back to the plain static PMTiles archive
+// with no join.
 const BUILDINGS_PMTILES_URL =
   import.meta.env.VITE_BUILDINGS_PMTILES_URL ?? "/data/buildings.pmtiles";
 
@@ -99,6 +105,42 @@ const MUNICIPALITY_FILL_COLOR: maplibregl.ExpressionSpecification = [
   DAMAGE_COLORS.Complete,
 ];
 
+// `damage_state_code` is a tile property once tile_join.py has joined this
+// scenario's result onto a building's feature -- not present at all for
+// the confidently-undamaged majority a scenario doesn't individually list
+// (see scenarioApi.ts's own comment on BuildingDamageResult). `match`'s
+// final argument is its fallback, used only if a joined feature somehow
+// carried a code outside 0..4.
+const BUILDING_DAMAGE_COLOR_EXPR = [
+  "match",
+  ["get", "damage_state_code"],
+  ...DAMAGE_STATES.flatMap((state, index) => [index, DAMAGE_COLORS[state]]),
+  DAMAGE_COLORS.Unknown,
+] as unknown as maplibregl.ExpressionSpecification;
+
+// A building with no joined `damage_state_code` is either outside this
+// scenario's evaluated region (never assessed -- Unknown/grey) or inside it
+// but not a close call (confidently undamaged -- None/green), same
+// evaluated-circle distinction the popup makes (isWithinEvaluatedRegion).
+// `null` (no scenario has run) falls back to Unknown everywhere.
+function buildingsFillColor(
+  evaluatedRegion: EvaluatedRegion | null
+): maplibregl.ExpressionSpecification {
+  const fallback: maplibregl.ExpressionSpecification | string = evaluatedRegion
+    ? [
+        "case",
+        [
+          "<",
+          ["distance", { type: "Point", coordinates: [evaluatedRegion.lon, evaluatedRegion.lat] }],
+          evaluatedRegion.radius_km * 1000,
+        ],
+        DAMAGE_COLORS.None,
+        DAMAGE_COLORS.Unknown,
+      ]
+    : DAMAGE_COLORS.Unknown;
+  return ["case", ["has", "damage_state_code"], BUILDING_DAMAGE_COLOR_EXPR, fallback];
+}
+
 // No scenario run yet -- the layer's own filter (set from
 // `municipalityStats`, see its feature-state effect below) excludes every
 // feature, matching this.
@@ -123,6 +165,12 @@ interface Props {
   // confidently-undamaged majority isn't sent at all (see scenarioApi.ts);
   // `evaluatedRegion` is how those get colored anyway.
   results: BuildingDamageResult[] | null;
+  // Keys the per-scenario tile-join endpoint (GET
+  // /tiles/{scenario_id}/{z}/{x}/{y}.mvt, services/scenario/tile_join.py).
+  // null before any scenario has run (or for the deployed-Lambda path,
+  // which doesn't populate results_store.py yet) -- the buildings layer
+  // then falls back to the plain static PMTiles archive, unjoined.
+  scenarioId: string | null;
   // Server-computed aggregate stats per municipality (services/scenario's
   // compute_municipality_stats) -- drives the low-zoom choropleth. Always
   // `[]` (never absent) when a scenario has run but the backend had no
@@ -151,6 +199,27 @@ interface Props {
 // itself over the wire on every one of a few hundred thousand rows.
 function damageStateLabel(code: number): string {
   return DAMAGE_STATES[code] ?? "Unknown";
+}
+
+// Reconstructs a BuildingDamageResult straight from a clicked buildings
+// tile feature's own properties (tile_join.py joins these in server-side,
+// see this file's top-of-file docstring) -- null when this building wasn't
+// a close call for the current scenario (no damage_state_code property at
+// all, the ordinary case for the confidently-undamaged majority).
+function tileDamageResult(
+  buildingId: string,
+  tileProps: Record<string, unknown>
+): BuildingDamageResult | null {
+  if (tileProps.damage_state_code === undefined) return null;
+  return {
+    building_id: buildingId,
+    damage_state_code: Number(tileProps.damage_state_code),
+    prob_none: Number(tileProps.prob_none),
+    prob_slight: Number(tileProps.prob_slight),
+    prob_moderate: Number(tileProps.prob_moderate),
+    prob_extensive: Number(tileProps.prob_extensive),
+    prob_complete: Number(tileProps.prob_complete),
+  };
 }
 
 function escapeHtml(value: unknown): string {
@@ -389,6 +458,72 @@ function renderMunicipalityPopupHtml(
   );
 }
 
+// Adds the buildings source + its two layers, pointed at either the
+// per-scenario tile-join endpoint (scenarioId given -- tile_join.py joins
+// this scenario's results into each tile's `buildings` features on the
+// fly) or the plain static archive (scenarioId null -- before any scenario
+// has run, or for the deployed-Lambda path, which doesn't populate
+// results_store.py/expose this endpoint yet). Called both on initial map
+// load and, again, whenever the source-swap effect below sees scenarioId
+// actually change -- a vector source's tiles/url can't be swapped in place
+// between a PMTiles archive and an XYZ tile endpoint, so this always
+// removes+re-adds both the source and its layers rather than mutating one
+// in place.
+function addBuildingsSourceAndLayers(map: MapLibreMap, scenarioId: string | null): void {
+  map.addSource(BUILDINGS_SOURCE_ID, {
+    type: "vector",
+    ...(scenarioId
+      ? { tiles: [`${API_URL}/tiles/${scenarioId}/{z}/{x}/{y}.mvt`] }
+      : { url: `pmtiles://${BUILDINGS_PMTILES_URL}` }),
+    promoteId: "building_id",
+    // Deliberately NOT overriding maxzoom for the static-archive case
+    // (contrast debris.pmtiles' source below, also unoverridden) --
+    // MapLibre already reads it from the PMTiles header itself, and
+    // that's the right source of truth as long as the archive's own
+    // metadata is honest. It currently isn't: buildings.pmtiles' header
+    // claims maxzoom 15, but z15 is a uniformly empty ~27-byte tile
+    // everywhere checked (10 major cities nationwide, not a regional
+    // gap), and the file's own tilestats reports 63.2M buildings against
+    // an expected ~12.9M (ADR-0010) -- a ~4.9x inflation, generator
+    // "tile-join v2.79.0" rather than plain tippecanoe, pointing at a bad
+    // merge, not a simple zoom-guess quirk. A hardcoded maxzoom:14
+    // override was tried here first and did paper over the symptom, but
+    // silently goes wrong again the moment this file is regenerated
+    // correctly (caps detail below whatever the fixed archive can
+    // actually support, with no error to catch it). The real fix belongs
+    // in the data (see twin-r-8a's fix-municipality-aggregation
+    // investigation into this same file's building_id mismatches) --
+    // once buildings.pmtiles is regenerated with an honest header, this
+    // default (no override) is already correct with no frontend change
+    // needed. The scenario tile-join endpoint reads tiles straight from
+    // that same archive, so it shares whatever this ends up being.
+  });
+  map.addLayer({
+    id: BUILDINGS_LAYER_ID,
+    type: "fill",
+    source: BUILDINGS_SOURCE_ID,
+    "source-layer": "buildings",
+    minzoom: BUILDING_DETAIL_MINZOOM,
+    paint: {
+      // Grey ("Unknown") until a scenario has run -- updated to the
+      // evaluated-region-aware expression once one has (see the
+      // evaluatedRegion effect, buildingsFillColor). A joined
+      // damage_state_code tile property always wins when present.
+      "fill-color": buildingsFillColor(null),
+      "fill-opacity": 0.85,
+      "fill-outline-color": "#00000033",
+    },
+  });
+  map.addLayer({
+    id: BUILDINGS_OUTLINE_LAYER_ID,
+    type: "line",
+    source: BUILDINGS_SOURCE_ID,
+    "source-layer": "buildings",
+    minzoom: BUILDING_DETAIL_MINZOOM,
+    paint: { "line-color": SELECTED_OUTLINE_PAINT, "line-width": 2.5 },
+  });
+}
+
 function faultsToFeatureCollection(faults: Fault[]): FeatureCollection {
   return {
     type: "FeatureCollection",
@@ -404,6 +539,7 @@ function faultsToFeatureCollection(faults: Fault[]): FeatureCollection {
 
 export function DamageMap({
   results,
+  scenarioId,
   municipalityStats,
   evaluatedRegion,
   faults,
@@ -420,13 +556,15 @@ export function DamageMap({
   // itself instead of guessing from feel.
   const [zoom, setZoom] = useState<number | null>(null);
   const mapLoadedRef = useRef(false);
-  const loadedBuildingIdsRef = useRef<Set<string>>(new Set());
   const loadedDebrisBuildingIdsRef = useRef<Set<string>>(new Set());
-  // Bumped once per `results` change in each of the two feature-state
-  // effects below -- lets a chunked run still in progress (scheduleChunked)
+  // Bumped once per `results` change in the debris feature-state effect
+  // below -- lets a chunked run still in progress (scheduleChunked)
   // recognize it's been superseded by a newer one and stop applying.
-  const buildingFeatureStateRunIdRef = useRef(0);
   const debrisFeatureStateRunIdRef = useRef(0);
+  // Which scenario_id (or null, meaning "no join, static archive") the
+  // buildings source is currently pointed at -- lets the source-swap effect
+  // below skip work when scenarioId hasn't actually changed.
+  const buildingsSourceScenarioIdRef = useRef<string | null>(null);
   const loadedMunicipalityCodesRef = useRef<Set<string>>(new Set());
   // Municipality popup needs the latest stats (by municipality_code) to
   // show a clicked polygon's breakdown, without re-binding the click
@@ -449,12 +587,13 @@ export function DamageMap({
   onMapClickRef.current = onMapClick;
   const onMapMoveRef = useRef(onMapMove);
   onMapMoveRef.current = onMapMove;
-  // Building-click popup needs the latest scenario results (and the
-  // region they were evaluated against) to classify a clicked building,
-  // without re-binding the click handler. Indexed by building_id (a
-  // national very-low-probability scenario can return 100k+ buildings,
-  // see docs/decisions -- a plain array .find() per click would be an
-  // O(n) scan over all of them).
+  // Debris click popup still needs a client-side building_id -> result
+  // lookup (buildings' own popup doesn't -- see tileDamageResult -- but
+  // debris.pmtiles isn't tile-joined, see this file's top-of-file
+  // docstring on why that's deferred). Indexed by building_id (a national
+  // very-low-probability scenario can return 100k+ buildings, see
+  // docs/decisions -- a plain array .find() per click would be an O(n)
+  // scan over all of them).
   const resultsById = useMemo(() => {
     const byId = new Map<string, BuildingDamageResult>();
     for (const b of results ?? []) byId.set(b.building_id, b);
@@ -462,6 +601,11 @@ export function DamageMap({
   }, [results]);
   const resultsByIdRef = useRef(resultsById);
   resultsByIdRef.current = resultsById;
+  // Building-click popup needs the region a scenario was evaluated against
+  // to classify a clicked building that has no joined damage_state_code
+  // (see isWithinEvaluatedRegion) -- damage itself now comes straight off
+  // the clicked tile feature's own properties (tile_join.py's join),
+  // not a client-side results lookup.
   const evaluatedRegionRef = useRef(evaluatedRegion);
   evaluatedRegionRef.current = evaluatedRegion;
 
@@ -535,55 +679,8 @@ export function DamageMap({
         },
       });
 
-      map.addSource(BUILDINGS_SOURCE_ID, {
-        type: "vector",
-        url: `pmtiles://${BUILDINGS_PMTILES_URL}`,
-        promoteId: "building_id",
-        // Deliberately NOT overriding maxzoom here (contrast debris.pmtiles'
-        // source below, also unoverridden) -- MapLibre already reads it
-        // from the PMTiles header itself, and that's the right source of
-        // truth as long as the archive's own metadata is honest. It
-        // currently isn't: buildings.pmtiles' header claims maxzoom 15,
-        // but z15 is a uniformly empty ~27-byte tile everywhere checked
-        // (10 major cities nationwide, not a regional gap), and the
-        // file's own tilestats reports 63.2M buildings against an
-        // expected ~12.9M (ADR-0010) -- a ~4.9x inflation, generator
-        // "tile-join v2.79.0" rather than plain tippecanoe, pointing at a
-        // bad merge, not a simple zoom-guess quirk. A hardcoded
-        // maxzoom:14 override was tried here first and did paper over the
-        // symptom, but silently goes wrong again the moment this file is
-        // regenerated correctly (caps detail below whatever the fixed
-        // archive can actually support, with no error to catch it). The
-        // real fix belongs in the data (see twin-r-8a's
-        // fix-municipality-aggregation investigation into this same
-        // file's building_id mismatches) -- once buildings.pmtiles is
-        // regenerated with an honest header, this default (no override)
-        // is already correct with no frontend change needed.
-      });
-      map.addLayer({
-        id: BUILDINGS_LAYER_ID,
-        type: "fill",
-        source: BUILDINGS_SOURCE_ID,
-        "source-layer": "buildings",
-        minzoom: BUILDING_DETAIL_MINZOOM,
-        paint: {
-          // Grey ("Unknown") until a scenario has run -- updated to the
-          // evaluated-region-aware expression below once one has (see the
-          // evaluatedRegion effect). A per-building "color" feature-state
-          // (damaged, or uncertain-None) always wins when set.
-          "fill-color": ["coalesce", ["feature-state", "color"], DAMAGE_COLORS.Unknown],
-          "fill-opacity": 0.85,
-          "fill-outline-color": "#00000033",
-        },
-      });
-      map.addLayer({
-        id: BUILDINGS_OUTLINE_LAYER_ID,
-        type: "line",
-        source: BUILDINGS_SOURCE_ID,
-        "source-layer": "buildings",
-        minzoom: BUILDING_DETAIL_MINZOOM,
-        paint: { "line-color": SELECTED_OUTLINE_PAINT, "line-width": 2.5 },
-      });
+      addBuildingsSourceAndLayers(map, null);
+      buildingsSourceScenarioIdRef.current = null;
 
       map.addSource(DEBRIS_SOURCE_ID, {
         type: "vector",
@@ -729,7 +826,7 @@ export function DamageMap({
 
         selectBuilding(buildingId);
 
-        const damage = resultsByIdRef.current.get(buildingId) ?? null;
+        const damage = tileDamageResult(buildingId, tileProps);
         const withinEvaluatedRegion = isWithinEvaluatedRegion(
           evaluatedRegionRef.current,
           e.lngLat.lat,
@@ -889,54 +986,30 @@ export function DamageMap({
     ]);
   }, [selectedFaultId]);
 
-  // Per-building coloring: only the buildings the API actually returned
-  // (damaged, or uncertain-None) get an explicit feature-state -- the
-  // confidently-undamaged majority is deliberately absent (see
-  // scenarioApi.ts) and picks up its color from the evaluated-region
-  // paint expression below instead, never from a per-building call.
+  // Swap the buildings source to this scenario's tile-join endpoint once
+  // one has run (or back to the plain static archive when it hasn't --
+  // e.g. a fresh page load). Replaces the old per-building setFeatureState
+  // loop entirely: since tile_join.py now joins damage straight onto each
+  // tile server-side, there's no client-side coloring pass left to do, at
+  // any scenario size.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || !mapLoadedRef.current) return;
+    if (buildingsSourceScenarioIdRef.current === scenarioId) return;
+    buildingsSourceScenarioIdRef.current = scenarioId;
 
-    buildingFeatureStateRunIdRef.current += 1;
-    const runId = buildingFeatureStateRunIdRef.current;
-    const isStale = () => buildingFeatureStateRunIdRef.current !== runId;
+    if (map.getLayer(BUILDINGS_OUTLINE_LAYER_ID)) map.removeLayer(BUILDINGS_OUTLINE_LAYER_ID);
+    if (map.getLayer(BUILDINGS_LAYER_ID)) map.removeLayer(BUILDINGS_LAYER_ID);
+    if (map.getSource(BUILDINGS_SOURCE_ID)) map.removeSource(BUILDINGS_SOURCE_ID);
+    addBuildingsSourceAndLayers(map, scenarioId);
+    // A source swap drops any feature-state the removed source held --
+    // the previous selection highlight (if any) no longer refers to a
+    // feature that still exists, so forget it rather than leaving a
+    // dangling ref that clearBuildingSelection would act on uselessly.
+    selectedRef.current = null;
 
-    const applyFeatureState = () => {
-      // Vector sources require sourceLayer on every feature-state call --
-      // omitting it fails silently-ish (throws, caught nowhere, leaving
-      // every building on the fallback color) rather than erroring loudly
-      // in the UI.
-      const target = { source: BUILDINGS_SOURCE_ID, sourceLayer: "buildings" };
-
-      // Clear previous run's coloring first, so damaged buildings from a
-      // smaller/differently-located scenario don't stay colored. Chunked
-      // (see scheduleChunked above) same as the coloring loop itself --
-      // the previous run can be just as large.
-      const idsToClear = Array.from(loadedBuildingIdsRef.current);
-      loadedBuildingIdsRef.current = new Set();
-
-      scheduleChunked(
-        idsToClear,
-        (id) => map.removeFeatureState({ ...target, id }),
-        isStale,
-        () => {
-          scheduleChunked(results ?? [], (building) => {
-            const color =
-              DAMAGE_COLORS[damageStateLabel(building.damage_state_code)] ?? DAMAGE_COLORS.Unknown;
-            map.setFeatureState({ ...target, id: building.building_id }, { color });
-            loadedBuildingIdsRef.current.add(building.building_id);
-          }, isStale);
-        }
-      );
-    };
-
-    if (map.isSourceLoaded(BUILDINGS_SOURCE_ID)) {
-      applyFeatureState();
-    } else {
-      map.once("sourcedata", applyFeatureState);
-    }
-  }, [results]);
+    map.setPaintProperty(BUILDINGS_LAYER_ID, "fill-color", buildingsFillColor(evaluatedRegion));
+  }, [scenarioId]);
 
   // Debris rings (ADR-0010): same building_id-keyed feature-state pattern
   // as the buildings layer above, on the separate debris source -- a
@@ -1055,41 +1128,22 @@ export function DamageMap({
   }, [municipalityStats]);
 
   // Everything else a scenario run changes: the fallback color for
-  // buildings *not* individually listed (green inside the evaluated
+  // buildings with no joined damage_state_code (green inside the evaluated
   // circle, grey outside it -- computed per-feature on the GPU via the
   // `distance` expression, so this scales with what's on screen, not with
-  // how many buildings the search radius actually covers) and the
-  // viewport, framed to the evaluated circle so "affected" buildings
-  // (green included) are in view without pulling in unrelated grey ones.
+  // how many buildings the search radius actually covers -- see
+  // buildingsFillColor) and the viewport, framed to the evaluated circle so
+  // "affected" buildings (green included) are in view without pulling in
+  // unrelated grey ones.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoadedRef.current) return;
 
-    if (!evaluatedRegion) {
-      map.setPaintProperty(BUILDINGS_LAYER_ID, "fill-color", [
-        "coalesce",
-        ["feature-state", "color"],
-        DAMAGE_COLORS.Unknown,
-      ]);
-      return;
+    map.setPaintProperty(BUILDINGS_LAYER_ID, "fill-color", buildingsFillColor(evaluatedRegion));
+
+    if (evaluatedRegion) {
+      map.fitBounds(boundsFromRegion(evaluatedRegion), { padding: 48, maxZoom: 15, duration: 500 });
     }
-
-    map.setPaintProperty(BUILDINGS_LAYER_ID, "fill-color", [
-      "coalesce",
-      ["feature-state", "color"],
-      [
-        "case",
-        [
-          "<",
-          ["distance", { type: "Point", coordinates: [evaluatedRegion.lon, evaluatedRegion.lat] }],
-          evaluatedRegion.radius_km * 1000,
-        ],
-        DAMAGE_COLORS.None,
-        DAMAGE_COLORS.Unknown,
-      ],
-    ] as maplibregl.ExpressionSpecification);
-
-    map.fitBounds(boundsFromRegion(evaluatedRegion), { padding: 48, maxZoom: 15, duration: 500 });
   }, [evaluatedRegion]);
 
   return (
