@@ -473,7 +473,20 @@ function addBuildingsSourceAndLayers(map: MapLibreMap, scenarioId: string | null
   map.addSource(BUILDINGS_SOURCE_ID, {
     type: "vector",
     ...(scenarioId
-      ? { tiles: [`${API_URL}/tiles/${scenarioId}/{z}/{x}/{y}.mvt`] }
+      ? {
+          tiles: [`${API_URL}/tiles/${scenarioId}/{z}/{x}/{y}.mvt`],
+          // A plain `tiles` array source has no TileJSON/PMTiles header to
+          // read a real maxzoom from -- MapLibre defaults it to 22, which
+          // made it request genuine z15+ tiles from tile_join.py instead
+          // of overscaling the last real z14 one (confirmed: every z15+
+          // request came back 204, since tile_join.py reads from this
+          // same buildings.pmtiles archive, whose real max_zoom is 14 --
+          // see the static-archive case's own maxzoom comment below).
+          // Hardcoded to 14 rather than fetched from the archive at
+          // runtime since it's the same constant either branch would need
+          // to agree on.
+          maxzoom: 14,
+        }
       : { url: `pmtiles://${BUILDINGS_PMTILES_URL}` }),
     promoteId: "building_id",
     // Deliberately NOT overriding maxzoom for the static-archive case

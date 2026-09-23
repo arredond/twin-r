@@ -27,5 +27,8 @@
   status`/`attach`/`stop` manage it). Frontend: http://localhost:5173.
   Scenario API: http://localhost:8000. `bin/twinr start prod` points the
   local frontend at the deployed AWS backend instead.
+- Do not use the claude-in-chrome browser extension/tools on this
+  project. Debug the frontend via curl/JS logic review, network request
+  logs, and console output instead.
 
 See the root `README.md` for the full quickstart, layout, and dev tooling.
