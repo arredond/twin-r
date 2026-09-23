@@ -18,8 +18,17 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "pmtiles>=3.8.1",
-    "mapbox-vector-tile>=2.2.0",
+    # The actual MVT-join logic (protobuf tag patching, see tile_join.py's
+    # own docstring) -- shared with the deployed tiles Lambda so the two
+    # runtimes can't drift on it. `mapbox-vector-tile` itself is no longer
+    # a direct dependency here: nothing in this package imports it now that
+    # the join moved into `tiles.tile_join`, only pmtiles.reader for the
+    # local mmap'd file.
+    "twin-r-tiles",
 ]
+
+[tool.uv.sources]
+twin-r-tiles = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
