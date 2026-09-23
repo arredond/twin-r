@@ -35,7 +35,7 @@ from .results_store import (
     write_municipality_stats,
 )
 from .rupture import Rupture, from_fault, from_manual_input
-from .tile_join import join_tile
+from .tile_join import join_tile, warm_cache
 
 app = FastAPI(title="twin-r scenario function (local)")
 
@@ -48,7 +48,8 @@ app = FastAPI(title="twin-r scenario function (local)")
 # so concurrent tile requests genuinely run in parallel across cores.
 # Capped at 8 rather than the host's full core count -- this is a local
 # dev convenience, not something that needs to saturate the machine.
-_TILE_POOL = ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
+_TILE_POOL_WORKERS = min(os.cpu_count() or 4, 8)
+_TILE_POOL = ProcessPoolExecutor(max_workers=_TILE_POOL_WORKERS)
 
 # Dev-only: the Vite dev server runs on a different origin. Locked down
 # properly once there's a real deployed frontend origin to allow instead.
@@ -155,6 +156,17 @@ def _run_and_serialize(rupture: Rupture, probability_level: str) -> dict:
         # int code).
         result = prepare_response_buildings(result)
         write_buildings(scenario_id, result)
+        # Fire-and-forget: pays each pool worker's cold-cache cost for this
+        # scenario now, in the background, rather than on the user's first
+        # tile request (see warm_cache's own docstring for why this is
+        # needed per scenario, not just once at process startup). One
+        # submission per worker is a best-effort way to reach all of them --
+        # ProcessPoolExecutor gives no direct "run on every worker" API,
+        # but submitting exactly as many tasks as there are workers reaches
+        # each one as long as they're otherwise idle, the common case
+        # between scenario runs.
+        for _ in range(_TILE_POOL_WORKERS):
+            _TILE_POOL.submit(warm_cache, BUILDINGS_PMTILES_PATH, scenario_id)
         elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
     except FileNotFoundError as e:
         raise HTTPException(status_code=500, detail=f"missing pipeline output: {e}") from e

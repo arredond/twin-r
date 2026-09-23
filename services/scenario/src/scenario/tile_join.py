@@ -58,6 +58,19 @@ def _building_results(scenario_id: str) -> dict[str, dict]:
     return df.to_dict(orient="index")
 
 
+def warm_cache(pmtiles_path: str | Path, scenario_id: str) -> None:
+    """Populates this process's `_pmtiles_reader`/`_building_results`
+    caches for `scenario_id` ahead of any real tile request -- each cache
+    lives in whichever process pool worker happens to run it (see
+    local.py's `_TILE_POOL`), not shared across workers, so a fresh
+    scenario is "cold" on every worker until something warms it. Submitted
+    once per pool worker right after a scenario's results are written
+    (local.py's `_run_and_serialize`) so that cost lands in the background
+    before the user's first pan/zoom, not on it."""
+    _pmtiles_reader(str(pmtiles_path))
+    _building_results(scenario_id)
+
+
 def join_tile(pmtiles_path: str | Path, scenario_id: str, z: int, x: int, y: int) -> bytes | None:
     """Returns a raw (uncompressed) MVT tile with each `buildings` feature's
     properties extended by the scenario's result for that `building_id`
@@ -94,4 +107,14 @@ def join_tile(pmtiles_path: str | Path, scenario_id: str, z: int, x: int, y: int
     # `quantize_bounds=None` keeps the already-tile-local coordinates
     # decode() handed back as-is, rather than re-projecting them as if they
     # were lon/lat -- geometry is untouched here, only properties changed.
-    return mapbox_vector_tile.encode(layers, default_options={"quantize_bounds": None})
+    # `check_winding_order=False` skips mapbox_vector_tile's default
+    # per-feature Shapely reconstruction + orient() + validity pass --
+    # real cost for a dense tile (measured ~1.6s -> ~0.9s for a 22k-feature
+    # tile, byte-identical output both ways). Safe here specifically
+    # because this geometry always comes straight from an already-valid,
+    # correctly-wound tippecanoe-produced tile (pipelines/exposure/tile.py)
+    # -- we never construct or transform geometry ourselves, only copy it
+    # through, so there's nothing for winding-order enforcement to catch.
+    return mapbox_vector_tile.encode(
+        layers, default_options={"quantize_bounds": None, "check_winding_order": False}
+    )
