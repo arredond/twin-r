@@ -22,3 +22,7 @@ apps/web/public/data/
 # CDK
 infra/cdk.out/
 
+# Local mirror of the results S3 bucket -- per-scenario status/stats/
+# buildings files written by services/scenario (results_store.py).
+results/
+

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,6 +25,13 @@ from .faults import get_fault, load_nearby_faults
 from .ground_motion import estimate_significant_distance_km
 from .probability_level import ProbabilityLevel, resolve_probability_level
 from .response import compute_municipality_stats, prepare_response_buildings
+from .results_store import (
+    init_scenario,
+    read_municipality_stats,
+    read_status,
+    write_buildings,
+    write_municipality_stats,
+)
 from .rupture import Rupture, from_fault, from_manual_input
 
 app = FastAPI(title="twin-r scenario function (local)")
@@ -90,6 +98,9 @@ def _run_and_serialize(rupture: Rupture, probability_level: str) -> dict:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
+    scenario_id = uuid.uuid4().hex
+    init_scenario(scenario_id)
+
     try:
         t0 = time.monotonic()
         # Computed here (not left to run_scenario's own default) so the
@@ -117,11 +128,13 @@ def _run_and_serialize(rupture: Rupture, probability_level: str) -> dict:
         # see compute_municipality_stats's own docstring for why this needs
         # lon/lat, which the thin payload deliberately drops.
         municipality_stats = compute_municipality_stats(result)
+        write_municipality_stats(scenario_id, municipality_stats)
         # Filters to damaged/uncertain buildings and trims to the thin
         # frontend-facing payload (see response.py's docstring for why
         # lon/lat/im_value/im_type are dropped and damage_state becomes an
         # int code).
         result = prepare_response_buildings(result)
+        write_buildings(scenario_id, result)
         elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
     except FileNotFoundError as e:
         raise HTTPException(status_code=500, detail=f"missing pipeline output: {e}") from e
@@ -132,6 +145,7 @@ def _run_and_serialize(rupture: Rupture, probability_level: str) -> dict:
         f"finite_rupture={rupture.surface is not None}, in {elapsed_ms}ms"
     )
     return {
+        "scenario_id": scenario_id,
         "rupture": {
             "lat": rupture.lat,
             "lon": rupture.lon,
@@ -248,6 +262,29 @@ def building_info(building_id: str) -> dict:
     if row is None:
         raise HTTPException(status_code=404, detail=f"building_id {building_id!r} not found")
     return row.to_dict()
+
+
+@app.get("/results/{scenario_id}/status")
+def scenario_status(scenario_id: str) -> dict:
+    """Per-layer readiness for a scenario run, keyed by the `scenario_id`
+    the /scenarios/* routes return. Compute is still synchronous today (see
+    results_store.py's docstring), so by the time a client can call this
+    the run has already finished and every flag reads true -- this is
+    scaffolding for the async job flow (poll while compute runs) that's the
+    intended next step, kept working now so the frontend's legend loading
+    indicators can be built against a stable contract before that lands."""
+    status = read_status(scenario_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"scenario_id {scenario_id!r} not found")
+    return status
+
+
+@app.get("/results/{scenario_id}/municipality_stats")
+def scenario_municipality_stats(scenario_id: str) -> list[dict]:
+    stats = read_municipality_stats(scenario_id)
+    if stats is None:
+        raise HTTPException(status_code=404, detail=f"scenario_id {scenario_id!r} not found")
+    return stats
 
 
 @app.get("/health")
