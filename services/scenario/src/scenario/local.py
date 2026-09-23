@@ -14,7 +14,7 @@ import os
 import time
 import uuid
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
@@ -33,6 +33,7 @@ from .results_store import (
     write_municipality_stats,
 )
 from .rupture import Rupture, from_fault, from_manual_input
+from .tile_join import join_tile
 
 app = FastAPI(title="twin-r scenario function (local)")
 
@@ -67,6 +68,12 @@ BUILDINGS_PATH = os.environ.get(
 EXPOSURE_PATH = os.environ.get("TWIN_R_EXPOSURE_PATH", f"{DATA_DIR}/exposure/exposure.parquet")
 FRAGILITY_PATH = os.environ.get("TWIN_R_FRAGILITY_PATH", f"{DATA_DIR}/fragility/fragility.parquet")
 FAULTS_PATH = os.environ.get("TWIN_R_FAULTS_PATH", f"{DATA_DIR}/faults/qafi_faults.parquet")
+# The same static buildings.pmtiles the frontend already loads directly
+# (apps/web's VITE_BUILDINGS_PMTILES_URL) -- tile_join.py reads individual
+# tiles from it and joins in a scenario's results, never re-tiling.
+BUILDINGS_PMTILES_PATH = os.environ.get(
+    "TWIN_R_BUILDINGS_PMTILES_PATH", f"{DATA_DIR}/exposure/buildings.pmtiles"
+)
 
 # Default reference point when a caller doesn't specify one -- Madrid, as
 # an arbitrary central point, not because it's seismically special. Any
@@ -285,6 +292,27 @@ def scenario_municipality_stats(scenario_id: str) -> list[dict]:
     if stats is None:
         raise HTTPException(status_code=404, detail=f"scenario_id {scenario_id!r} not found")
     return stats
+
+
+@app.get("/tiles/{scenario_id}/{z}/{x}/{y}.mvt")
+def scenario_tile(scenario_id: str, z: int, x: int, y: int) -> Response:
+    """A buildings vector tile with each feature's properties extended by
+    this scenario's result for its `building_id`, when present -- lets the
+    frontend drive a MapLibre vector source straight off scenario results
+    instead of fetching every affected building_id and setFeatureState-ing
+    them in one by one (see tile_join.py's docstring for the full design
+    rationale, including why this reads one tile at a time rather than
+    building a per-scenario buildings.pmtiles)."""
+    try:
+        tile = join_tile(BUILDINGS_PMTILES_PATH, scenario_id, z, x, y)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    if tile is None:
+        # No base-tile data at this z/x/y (e.g. open ocean) -- a 204, not a
+        # 404: the scenario_id is valid, this tile is just legitimately
+        # empty, same as buildings.pmtiles itself would return.
+        return Response(status_code=204)
+    return Response(content=tile, media_type="application/vnd.mapbox-vector-tile")
 
 
 @app.get("/health")

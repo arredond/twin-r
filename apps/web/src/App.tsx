@@ -197,7 +197,11 @@ export default function App() {
 
         <div>
           <h2 style={{ fontSize: "0.9rem" }}>Damage state</h2>
-          <DamageLegend />
+          <DamageLegend
+            municipalStatsStatus={isRunning ? "loading" : result ? "ready" : "idle"}
+            buildingsStatus={isRunning ? "loading" : result ? "ready" : "idle"}
+            debrisStatus={isRunning ? "loading" : result ? "ready" : "idle"}
+          />
         </div>
 
         <p style={{ fontSize: "0.75rem", color: "#999" }}>

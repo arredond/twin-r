@@ -80,6 +80,14 @@ export interface MunicipalityStats {
 }
 
 export interface ScenarioResult {
+  // Keys this run's files under results/<scenario_id>/ (services/scenario/
+  // results_store.py) -- not yet used for anything on the frontend, but
+  // will address the per-scenario tile-join endpoint (GET
+  // /tiles/{scenario_id}/{z}/{x}/{y}.mvt) once DamageMap switches to it.
+  // Optional: only local.py sets it today -- handler.py's deployed Lambda
+  // path doesn't write to results_store.py yet (local-only for now, see
+  // the results-pipeline plan).
+  scenario_id?: string;
   rupture: {
     lat: number;
     lon: number;
