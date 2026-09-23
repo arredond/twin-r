@@ -6,18 +6,21 @@ services/scenario/results_store.py's local-disk version. Same key layout
 (reads, per tile request) agree on where a scenario's results live without
 either one hardcoding the other's paths.
 
-`buildings.json`, not `.parquet`: this module is imported by the tiles
+`buildings.json.gz`, not `.parquet`: this module is imported by the tiles
 Lambda (services/tiles/handler.py), which has to stay under Lambda's
 250MB zip-package size limit -- confirmed by a real deploy failure
 ("Unzipped size must be smaller than 262144000 bytes") with pandas/pyarrow
-in the dependency closure (pyarrow alone is ~155MB unzipped). A scenario's
-thin results are at most tens of thousands of rows (response.py's own
-filtering), so plain JSON stays small regardless, and this module never
-needs pandas/pyarrow/numpy at all -- `write_buildings` takes a plain
-list of dicts (the caller, services/scenario/handler.py, already has a
-DataFrame and does `.to_dict(orient="records")` itself before calling in,
-rather than this shared module importing pandas just to accept one either
-way).
+in the dependency closure (pyarrow alone is ~155MB unzipped), so this
+module never needs pandas/pyarrow/numpy at all -- `write_buildings` takes
+a plain list of dicts (the caller, services/scenario/handler.py, already
+has a DataFrame and does `.to_dict(orient="records")` itself before
+calling in, rather than this shared module importing pandas just to
+accept one either way). Gzipped because plain JSON, tried first, measured
+~5-7x larger than the parquet it replaced (real S3 storage/transfer
+bloat) -- gzip closes that gap almost entirely (parquet-sized or smaller)
+for a decompress cost still in the tens of milliseconds even at 400k
+rows. `municipality_stats.json` stays uncompressed -- at most ~8,200
+municipalities nationwide, small regardless of format.
 
 `boto3` isn't a project dependency on purpose (matches services/scenario/
 handler.py's own convention) -- every Lambda Python runtime bundles it
@@ -27,6 +30,7 @@ Lambda handler, never during local dev.
 
 from __future__ import annotations
 
+import gzip
 import json
 import time
 from functools import lru_cache
@@ -77,11 +81,13 @@ def write_municipality_stats(bucket: str, scenario_id: str, stats: list[dict]) -
 
 
 def write_buildings(bucket: str, scenario_id: str, buildings: list[dict]) -> None:
+    raw = json.dumps(buildings).encode("utf-8")
     _client().put_object(
         Bucket=bucket,
-        Key=_key(scenario_id, "buildings.json"),
-        Body=json.dumps(buildings).encode("utf-8"),
+        Key=_key(scenario_id, "buildings.json.gz"),
+        Body=gzip.compress(raw),
         ContentType="application/json",
+        ContentEncoding="gzip",
     )
     _write_status(bucket, scenario_id, buildings_ready=True)
 
@@ -96,10 +102,10 @@ def read_building_results(bucket: str, scenario_id: str) -> dict[str, dict]:
     version."""
     s3 = _client()
     try:
-        obj = s3.get_object(Bucket=bucket, Key=_key(scenario_id, "buildings.json"))
+        obj = s3.get_object(Bucket=bucket, Key=_key(scenario_id, "buildings.json.gz"))
     except s3.exceptions.NoSuchKey as e:
         raise FileNotFoundError(f"no results for scenario_id {scenario_id!r}") from e
-    rows = json.loads(obj["Body"].read())
+    rows = json.loads(gzip.decompress(obj["Body"].read()))
     # keep-last: building_id isn't always unique in the pipeline output
     # (see DATA-SOURCES.md's "non-unique building_id" known issue) --
     # later rows overwriting earlier ones in this loop matches

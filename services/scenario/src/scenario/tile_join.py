@@ -53,19 +53,20 @@ def _building_results(scenario_id: str) -> dict[str, dict]:
     the normal case, as a user pans/zooms -- don't re-read the results file
     each time.
 
-    JSON, not parquet -- see results_store.py's own comment on why (the
-    tiles Lambda that reads this same file shape in the cloud has to stay
-    under Lambda's 250MB zip-package limit, and pandas/pyarrow alone blow
-    past that). Reading it here also skips pandas/pyarrow entirely, not
-    just to match the cloud format -- a plain dict-building loop over a
-    JSON list is already fast enough at this scale (see the note this
-    replaced: a *pandas* `iterrows()` + per-row `.drop()` loop measured
-    36s for 400k rows; this is a single pass building plain dicts, no
-    DataFrame construction at all)."""
-    path = scenario_dir(scenario_id) / "buildings.json"
+    Gzipped JSON, not parquet -- see results_store.py's own comment on why
+    (the tiles Lambda that reads this same file shape in the cloud has to
+    stay under Lambda's 250MB zip-package limit, and pandas/pyarrow alone
+    blow past that; plain uncompressed JSON was tried first but measured
+    5-7x larger than the parquet it replaced). Reading it here also skips
+    pandas/pyarrow entirely, not just to match the cloud format -- a plain
+    dict-building loop over a JSON list is already fast enough at this
+    scale (see the note this replaced: a *pandas* `iterrows()` + per-row
+    `.drop()` loop measured 36s for 400k rows; this is a single pass
+    building plain dicts, no DataFrame construction at all)."""
+    path = scenario_dir(scenario_id) / "buildings.json.gz"
     if not path.exists():
         raise FileNotFoundError(f"no results for scenario_id {scenario_id!r}")
-    rows = json.loads(path.read_text())
+    rows = json.loads(gzip.decompress(path.read_bytes()))
     # keep-last: building_id isn't always unique in the pipeline output
     # (see DATA-SOURCES.md's "non-unique building_id" known issue) --
     # later rows overwriting earlier ones in this loop matches

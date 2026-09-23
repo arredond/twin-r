@@ -10,15 +10,20 @@ frontend can start polling `status.json` and consuming
 `municipality_stats.json`/`buildings.json` incrementally even though, for
 now, all three land in quick succession within the same request.
 
-`buildings.json` (not `.parquet`, despite `write_buildings` taking a
+`buildings.json.gz` (not `.parquet`, despite `write_buildings` taking a
 DataFrame): the tiles Lambda that reads this file back
 (`services/tiles/results_store.py`) has to stay under Lambda's 250MB
 zip-package size limit, and `pyarrow` alone (needed for `pd.read_parquet`)
 is ~155MB unzipped -- confirmed by a real deploy failure ("Unzipped size
-must be smaller than 262144000 bytes"). A scenario's thin results are at
-most tens of thousands of rows (see response.py's own filtering), so
-plain JSON is small regardless of format, and this way the tiles Lambda
-never needs pandas/pyarrow/numpy at all, only stdlib `json`.
+must be smaller than 262144000 bytes"). Plain (uncompressed) JSON was
+tried first, but measured ~5-7x larger than the parquet it replaced
+(3.6MB vs 762KB at 20k rows; 72.7MB vs 10.5MB at 400k) -- real S3
+storage/transfer bloat, not just a theoretical concern. Gzipping closes
+that gap almost entirely (590KB/11.8MB for the same two sizes, roughly
+parquet-sized or smaller) for a decompress+parse cost still measured in
+the tens of milliseconds even at 400k rows. `municipality_stats.json`
+stays uncompressed -- at most ~8,200 municipalities nationwide, small
+regardless of format.
 
 `scenario_id` (minted in local.py/handler.py, not here) is a random UUID4
 for now -- every request gets a fresh id and a fresh directory even if an
@@ -33,6 +38,7 @@ content-addressed before that lands.
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import time
@@ -74,8 +80,9 @@ def write_municipality_stats(scenario_id: str, stats: list[dict]) -> None:
 
 
 def write_buildings(scenario_id: str, buildings: pd.DataFrame) -> None:
-    path = scenario_dir(scenario_id) / "buildings.json"
-    path.write_text(json.dumps(buildings.to_dict(orient="records")))
+    path = scenario_dir(scenario_id) / "buildings.json.gz"
+    raw = json.dumps(buildings.to_dict(orient="records")).encode("utf-8")
+    path.write_bytes(gzip.compress(raw))
     _write_status(scenario_id, buildings_ready=True)
 
 
