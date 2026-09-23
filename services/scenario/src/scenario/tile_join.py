@@ -6,7 +6,7 @@ re-tiling the whole buildings dataset per scenario (infeasible -- it'd mean
 either shipping all of buildings.pmtiles into a Lambda to re-run tippecanoe,
 or running tippecanoe synchronously in the request path), each request here
 reads exactly one static tile from the existing buildings.pmtiles, reads the
-scenario's own thin buildings.parquet (already filtered to just the
+scenario's own thin buildings.json (already filtered to just the
 damaged/uncertain buildings by response.py's `prepare_response_buildings`,
 so it's small -- tens of thousands of rows at most, not the national
 dataset), and joins the two by `building_id` before re-encoding the tile.
@@ -26,10 +26,10 @@ logic (docs/decisions/0001-compute-and-iac.md).
 from __future__ import annotations
 
 import gzip
+import json
 from functools import lru_cache
 from pathlib import Path
 
-import pandas as pd
 from pmtiles.reader import Compression, MmapSource, Reader
 from tiles.tile_join import join_tile_bytes
 
@@ -50,22 +50,29 @@ def _building_results(scenario_id: str) -> dict[str, dict]:
     """building_id -> the scenario's thin result row, as a plain dict of
     extra tile properties. Cached per scenario_id (small: at most tens of
     thousands of rows) so repeated tile requests for the same scenario --
-    the normal case, as a user pans/zooms -- don't re-read the parquet file
-    each time."""
-    path = scenario_dir(scenario_id) / "buildings.parquet"
+    the normal case, as a user pans/zooms -- don't re-read the results file
+    each time.
+
+    JSON, not parquet -- see results_store.py's own comment on why (the
+    tiles Lambda that reads this same file shape in the cloud has to stay
+    under Lambda's 250MB zip-package limit, and pandas/pyarrow alone blow
+    past that). Reading it here also skips pandas/pyarrow entirely, not
+    just to match the cloud format -- a plain dict-building loop over a
+    JSON list is already fast enough at this scale (see the note this
+    replaced: a *pandas* `iterrows()` + per-row `.drop()` loop measured
+    36s for 400k rows; this is a single pass building plain dicts, no
+    DataFrame construction at all)."""
+    path = scenario_dir(scenario_id) / "buildings.json"
     if not path.exists():
         raise FileNotFoundError(f"no results for scenario_id {scenario_id!r}")
-    df = pd.read_parquet(path)
-    # Vectorized, not `df.iterrows()` + a per-row `.drop()` -- that pattern
-    # measured 36s for a 400k-row scenario (a large "very low probability"
-    # nationwide run easily reaches that many rows) against 0.4s here, and
-    # this is on the hot path for every tile a user's very first pan/zoom
-    # touches. `keep="last"` because building_id isn't always unique in the
-    # pipeline output (see DATA-SOURCES.md's "non-unique building_id" known
-    # issue) -- matches the previous per-row dict-building loop's
-    # overwrite-on-conflict behavior, not a new decision.
-    df = df.drop_duplicates(subset="building_id", keep="last").set_index("building_id")
-    return df.to_dict(orient="index")
+    rows = json.loads(path.read_text())
+    # keep-last: building_id isn't always unique in the pipeline output
+    # (see DATA-SOURCES.md's "non-unique building_id" known issue) --
+    # later rows overwriting earlier ones in this loop matches
+    # pandas' drop_duplicates(keep="last"), not a new decision.
+    return {
+        row["building_id"]: {k: v for k, v in row.items() if k != "building_id"} for row in rows
+    }
 
 
 def warm_cache(pmtiles_path: str | Path, scenario_id: str) -> None:

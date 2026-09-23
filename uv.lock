@@ -2257,17 +2257,13 @@ version = "0.1.0"
 source = { editable = "services/tiles" }
 dependencies = [
     { name = "mapbox-vector-tile" },
-    { name = "pandas" },
     { name = "pmtiles" },
-    { name = "pyarrow" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "mapbox-vector-tile", specifier = ">=2.2.0" },
-    { name = "pandas", specifier = ">=2.2" },
     { name = "pmtiles", specifier = ">=3.8.1" },
-    { name = "pyarrow", specifier = ">=17.0" },
 ]
 
 [[package]]

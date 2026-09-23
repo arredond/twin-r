@@ -40,7 +40,7 @@ def join_tile_bytes(raw_tile_bytes: bytes, results: dict[str, dict]) -> bytes:
     archive's tile_compression called for it. `results` is building_id ->
     a plain dict of extra tile properties (e.g. damage_state_code/prob_*)
     -- typically `df.to_dict(orient="index")` off a scenario's thin
-    buildings.parquet, so values are already plain Python bool/int/float,
+    buildings.json, so values are already plain Python bool/int/float,
     never numpy scalar types (the protobuf setters below would reject
     those)."""
     tile = mvt_pb2.tile()

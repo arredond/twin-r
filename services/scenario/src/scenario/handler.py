@@ -173,16 +173,21 @@ def _run_and_respond(rupture: Rupture, probability_level: str) -> dict:
     scenario_id = uuid.uuid4().hex
     if RESULTS_BUCKET is not None:
         # Deferred import, same reasoning as engine/ground_motion above --
-        # keeps pandas/boto3 out of the cold-path routes that never reach
-        # this function. Writes the same status.json/municipality_stats.json/
-        # buildings.parquet layout local dev's results_store.py writes to
+        # keeps boto3 out of the cold-path routes that never reach this
+        # function. Writes the same status.json/municipality_stats.json/
+        # buildings.json layout local dev's results_store.py writes to
         # local disk, so the tiles Lambda (services/tiles) can read a prod
         # scenario's results the same way it reads a local one.
+        # tiles.results_store.write_buildings takes a plain list of dicts,
+        # not a DataFrame -- that module has to stay free of pandas/pyarrow
+        # to fit Lambda's 250MB zip-package limit (see its own docstring),
+        # so the DataFrame -> records conversion happens here instead,
+        # where pandas is already a dependency regardless.
         from tiles.results_store import init_scenario, write_buildings, write_municipality_stats
 
         init_scenario(RESULTS_BUCKET, scenario_id)
         write_municipality_stats(RESULTS_BUCKET, scenario_id, municipality_stats)
-        write_buildings(RESULTS_BUCKET, scenario_id, result)
+        write_buildings(RESULTS_BUCKET, scenario_id, result.to_dict(orient="records"))
 
     payload = {
         "scenario_id": scenario_id,

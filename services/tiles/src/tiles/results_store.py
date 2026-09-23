@@ -1,10 +1,23 @@
 """S3-backed scenario results store -- the cloud counterpart of
 services/scenario/results_store.py's local-disk version. Same key layout
-(status.json, municipality_stats.json, buildings.parquet under
+(status.json, municipality_stats.json, buildings.json under
 `<scenario_id>/` in the results bucket) so services/scenario/handler.py
 (writes, after computing a scenario) and this package's own handler.py
 (reads, per tile request) agree on where a scenario's results live without
 either one hardcoding the other's paths.
+
+`buildings.json`, not `.parquet`: this module is imported by the tiles
+Lambda (services/tiles/handler.py), which has to stay under Lambda's
+250MB zip-package size limit -- confirmed by a real deploy failure
+("Unzipped size must be smaller than 262144000 bytes") with pandas/pyarrow
+in the dependency closure (pyarrow alone is ~155MB unzipped). A scenario's
+thin results are at most tens of thousands of rows (response.py's own
+filtering), so plain JSON stays small regardless, and this module never
+needs pandas/pyarrow/numpy at all -- `write_buildings` takes a plain
+list of dicts (the caller, services/scenario/handler.py, already has a
+DataFrame and does `.to_dict(orient="records")` itself before calling in,
+rather than this shared module importing pandas just to accept one either
+way).
 
 `boto3` isn't a project dependency on purpose (matches services/scenario/
 handler.py's own convention) -- every Lambda Python runtime bundles it
@@ -17,10 +30,8 @@ from __future__ import annotations
 import json
 import time
 from functools import lru_cache
-from io import BytesIO
 
 import boto3  # pyrefly: ignore -- Lambda-runtime-provided, unresolvable for local type checking
-import pandas as pd
 
 
 def _client():
@@ -65,11 +76,12 @@ def write_municipality_stats(bucket: str, scenario_id: str, stats: list[dict]) -
     _write_status(bucket, scenario_id, municipal_stats_ready=True)
 
 
-def write_buildings(bucket: str, scenario_id: str, buildings: pd.DataFrame) -> None:
-    buf = BytesIO()
-    buildings.to_parquet(buf, index=False)
+def write_buildings(bucket: str, scenario_id: str, buildings: list[dict]) -> None:
     _client().put_object(
-        Bucket=bucket, Key=_key(scenario_id, "buildings.parquet"), Body=buf.getvalue()
+        Bucket=bucket,
+        Key=_key(scenario_id, "buildings.json"),
+        Body=json.dumps(buildings).encode("utf-8"),
+        ContentType="application/json",
     )
     _write_status(bucket, scenario_id, buildings_ready=True)
 
@@ -84,12 +96,14 @@ def read_building_results(bucket: str, scenario_id: str) -> dict[str, dict]:
     version."""
     s3 = _client()
     try:
-        obj = s3.get_object(Bucket=bucket, Key=_key(scenario_id, "buildings.parquet"))
+        obj = s3.get_object(Bucket=bucket, Key=_key(scenario_id, "buildings.json"))
     except s3.exceptions.NoSuchKey as e:
         raise FileNotFoundError(f"no results for scenario_id {scenario_id!r}") from e
-    df = pd.read_parquet(BytesIO(obj["Body"].read()))
-    # keep="last": building_id isn't always unique in the pipeline output
-    # (see DATA-SOURCES.md's "non-unique building_id" known issue) -- matches
-    # local dev's tile_join.py._building_results, not a new decision.
-    df = df.drop_duplicates(subset="building_id", keep="last").set_index("building_id")
-    return df.to_dict(orient="index")
+    rows = json.loads(obj["Body"].read())
+    # keep-last: building_id isn't always unique in the pipeline output
+    # (see DATA-SOURCES.md's "non-unique building_id" known issue) --
+    # later rows overwriting earlier ones in this loop matches
+    # pandas' drop_duplicates(keep="last"), not a new decision.
+    return {
+        row["building_id"]: {k: v for k, v in row.items() if k != "building_id"} for row in rows
+    }

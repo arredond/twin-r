@@ -6,8 +6,10 @@ this becomes). That one pulls in openquake.hazardlib/numpy/scipy/fiona
 (confirmed 7-9s+ cold starts even for routes that don't touch physics, see
 services/scenario/handler.py's own comment on why engine.py/ground_motion.py
 are imported lazily there) -- this function needs none of that, only
-pandas/pmtiles/mapbox_vector_tile's protobuf schema (this package's own
-tile_join.py), so it stays small and fast to cold-start regardless of how
+pmtiles/mapbox_vector_tile's protobuf schema (this package's own
+tile_join.py; deliberately not pandas/pyarrow either, see
+results_store.py's own docstring on the deploy-size limit that ruled
+those out) -- so it stays small and fast to cold-start regardless of how
 heavy the compute Lambda gets. A tile-request burst also shouldn't compete
 with scenario compute for the same Lambda's concurrency/memory budget --
 splitting them means each scales independently.
@@ -17,7 +19,7 @@ Serves exactly one route: GET /tiles/{scenario_id}/{z}/{x}/{y}.mvt.
 Exposure/fragility/faults parquet paths come from environment variables in
 services/scenario's Lambda -- this one only needs the data bucket (for
 buildings.pmtiles) and the results bucket (for a scenario's thin
-buildings.parquet, written by services/scenario/handler.py's compute path
+buildings.json, written by services/scenario/handler.py's compute path
 via this package's own results_store.py), both via env vars for the same
 local/cloud parity reason.
 """

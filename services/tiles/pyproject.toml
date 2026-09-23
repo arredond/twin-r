@@ -4,8 +4,11 @@ version = "0.1.0"
 description = "twin-r tile-join function: MVT tile + a scenario's thin results -> a joined tile, runnable as a Lambda or locally"
 requires-python = ">=3.12"
 dependencies = [
-    "pandas>=2.2",
-    "pyarrow>=17.0",
+    # Deliberately NOT pandas/pyarrow -- results_store.py reads/writes
+    # plain JSON specifically so this package's Lambda deployment package
+    # stays under Lambda's 250MB zip-package size limit (pyarrow alone is
+    # ~155MB unzipped; a real deploy hit that limit before this was
+    # trimmed down -- see results_store.py's own docstring).
     "pmtiles>=3.8.1",
     "mapbox-vector-tile>=2.2.0",
 ]

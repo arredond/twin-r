@@ -7,8 +7,18 @@ Compute is still synchronous end to end (no background job yet -- that's
 the next step once this on-disk shape is validated locally): each `write_*`
 call below just persists a stage's output right after computing it, so the
 frontend can start polling `status.json` and consuming
-`municipality_stats.json`/`buildings.parquet` incrementally even though, for
+`municipality_stats.json`/`buildings.json` incrementally even though, for
 now, all three land in quick succession within the same request.
+
+`buildings.json` (not `.parquet`, despite `write_buildings` taking a
+DataFrame): the tiles Lambda that reads this file back
+(`services/tiles/results_store.py`) has to stay under Lambda's 250MB
+zip-package size limit, and `pyarrow` alone (needed for `pd.read_parquet`)
+is ~155MB unzipped -- confirmed by a real deploy failure ("Unzipped size
+must be smaller than 262144000 bytes"). A scenario's thin results are at
+most tens of thousands of rows (see response.py's own filtering), so
+plain JSON is small regardless of format, and this way the tiles Lambda
+never needs pandas/pyarrow/numpy at all, only stdlib `json`.
 
 `scenario_id` (minted in local.py/handler.py, not here) is a random UUID4
 for now -- every request gets a fresh id and a fresh directory even if an
@@ -64,8 +74,8 @@ def write_municipality_stats(scenario_id: str, stats: list[dict]) -> None:
 
 
 def write_buildings(scenario_id: str, buildings: pd.DataFrame) -> None:
-    path = scenario_dir(scenario_id) / "buildings.parquet"
-    buildings.to_parquet(path, index=False)
+    path = scenario_dir(scenario_id) / "buildings.json"
+    path.write_text(json.dumps(buildings.to_dict(orient="records")))
     _write_status(scenario_id, buildings_ready=True)
 
 

@@ -33,7 +33,7 @@ client:
 (b) was chosen. Locally, this landed as `services/scenario/local.py`'s
 `GET /tiles/{scenario_id}/{z}/{x}/{y}.mvt`, backed by a `results/`
 directory mirroring the eventual S3 layout (`status.json`,
-`municipality_stats.json`, `buildings.parquet` per scenario). Bringing
+`municipality_stats.json`, `buildings.json` per scenario). Bringing
 this to production raised the concrete question this ADR is about: what
 should the *deployed* version of this endpoint look like?
 
@@ -42,8 +42,8 @@ pulls in `openquake.hazardlib`/`numpy`/`scipy`/`fiona`/GDAL — confirmed
 7-9s+ cold starts even for its own routes that never touch physics
 (`/faults`, `/buildings/{id}`), which is why `engine.py`/`ground_motion.py`
 are imported lazily inside `_run_and_respond` rather than at module level.
-The tile-join code needs none of that: only `pandas`/`pmtiles`/
-`mapbox_vector_tile`'s compiled protobuf schema.
+The tile-join code needs none of that: only `pmtiles`/`mapbox_vector_tile`'s
+compiled protobuf schema.
 
 ## Decision
 
@@ -85,7 +85,7 @@ drift between the two.
 
 **Results are S3-backed in the cloud** (`services/tiles/results_store.py`),
 same key layout as local dev's `results/<scenario_id>/` directory
-(`status.json`, `municipality_stats.json`, `buildings.parquet`) so the two
+(`status.json`, `municipality_stats.json`, `buildings.json`) so the two
 runtimes agree on where a scenario's results live without hardcoding.
 `services/scenario/handler.py`'s compute path now writes this layout to
 the results bucket (via the same `tiles.results_store` module) in addition
@@ -140,3 +140,19 @@ translate directly to.
   separate S3 writes per large scenario, under the same `scenario_id` --
   slightly more S3 traffic per compute request, not expected to matter at
   MVP scale.
+- **Results are JSON, not parquet, specifically because of the tiles
+  Lambda's size budget**: a real `cdk deploy` failed outright with
+  `pandas`/`pyarrow` in `services/tiles`'s dependency closure --
+  `"Unzipped size must be smaller than 262144000 bytes"` (Lambda's 250MB
+  zip-package hard limit; `pyarrow` alone is ~155MB unzipped, `pandas`
+  another ~70MB). `write_buildings`/`read_building_results`
+  (`results_store.py`, both the local-disk and S3-backed versions) write
+  plain JSON instead -- a scenario's thin results are at most tens of
+  thousands of rows regardless of format, so this costs nothing
+  functionally, and it means `services/tiles` never needs pandas/pyarrow/
+  numpy at all (down to ~100MB unzipped: mapbox_vector_tile + its own
+  shapely/pyclipper/protobuf + pmtiles + numpy, the last one still pulled
+  in transitively by shapely). `services/scenario/handler.py` converts its
+  DataFrame to a plain list of dicts itself before calling
+  `tiles.results_store.write_buildings` -- that shared module stays free
+  of pandas even though its caller already has it.
