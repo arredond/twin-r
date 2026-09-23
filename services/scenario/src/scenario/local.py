@@ -10,9 +10,11 @@ Run with: uv run --package twin-r-scenario uvicorn scenario.local:app --reload
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import uuid
+from concurrent.futures import ProcessPoolExecutor
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,6 +38,17 @@ from .rupture import Rupture, from_fault, from_manual_input
 from .tile_join import join_tile
 
 app = FastAPI(title="twin-r scenario function (local)")
+
+# join_tile does real CPU work per call (MVT decode + re-encode --
+# mapbox_vector_tile.encode alone measured ~0.4s for a mid-size tile, pure
+# Python). A map viewport fires a dozen-plus tile requests at once; a sync
+# route (FastAPI's default thread pool) hits the GIL and serializes that
+# CPU work across them instead of overlapping it, measured to stack up to
+# ~3s for the last tile in a burst of 12. A process pool sidesteps the GIL
+# so concurrent tile requests genuinely run in parallel across cores.
+# Capped at 8 rather than the host's full core count -- this is a local
+# dev convenience, not something that needs to saturate the machine.
+_TILE_POOL = ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
 
 # Dev-only: the Vite dev server runs on a different origin. Locked down
 # properly once there's a real deployed frontend origin to allow instead.
@@ -295,16 +308,23 @@ def scenario_municipality_stats(scenario_id: str) -> list[dict]:
 
 
 @app.get("/tiles/{scenario_id}/{z}/{x}/{y}.mvt")
-def scenario_tile(scenario_id: str, z: int, x: int, y: int) -> Response:
+async def scenario_tile(scenario_id: str, z: int, x: int, y: int) -> Response:
     """A buildings vector tile with each feature's properties extended by
     this scenario's result for its `building_id`, when present -- lets the
     frontend drive a MapLibre vector source straight off scenario results
     instead of fetching every affected building_id and setFeatureState-ing
     them in one by one (see tile_join.py's docstring for the full design
     rationale, including why this reads one tile at a time rather than
-    building a per-scenario buildings.pmtiles)."""
+    building a per-scenario buildings.pmtiles).
+
+    Dispatched to `_TILE_POOL` (see its own comment) rather than called
+    directly -- join_tile is CPU-bound, and running it in-process would
+    serialize concurrent tile requests behind the GIL."""
+    loop = asyncio.get_running_loop()
     try:
-        tile = join_tile(BUILDINGS_PMTILES_PATH, scenario_id, z, x, y)
+        tile = await loop.run_in_executor(
+            _TILE_POOL, join_tile, BUILDINGS_PMTILES_PATH, scenario_id, z, x, y
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     if tile is None:
