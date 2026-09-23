@@ -119,6 +119,14 @@ def _run_and_serialize(rupture: Rupture, probability_level: str) -> dict:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
+    # Random for now -- every run gets a fresh id even if the exact same
+    # rupture/probability_level was already computed. Future: hash the
+    # scenario's actual characteristics (rupture params, probability_level)
+    # plus the exposure/fragility data version and pipeline version into
+    # this id instead, so an identical request naturally lands on the same
+    # scenario_id and can reuse/cache the existing results/ entry rather
+    # than recomputing. Not done now -- flagging so the id generation isn't
+    # assumed stable/content-addressed before that lands.
     scenario_id = uuid.uuid4().hex
     init_scenario(scenario_id)
 

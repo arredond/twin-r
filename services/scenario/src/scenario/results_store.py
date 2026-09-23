@@ -9,6 +9,16 @@ call below just persists a stage's output right after computing it, so the
 frontend can start polling `status.json` and consuming
 `municipality_stats.json`/`buildings.parquet` incrementally even though, for
 now, all three land in quick succession within the same request.
+
+`scenario_id` (minted in local.py/handler.py, not here) is a random UUID4
+for now -- every request gets a fresh id and a fresh directory even if an
+identical rupture/probability_level was already computed. Future: derive
+it instead from a hash of the scenario's actual characteristics (rupture
+params, probability_level) plus the exposure/fragility data version and
+pipeline version, so an identical request naturally lands on the same
+scenario_id and this directory (or its S3 equivalent) can be reused/cached
+rather than recomputed. Not done yet -- noted so the id isn't assumed
+content-addressed before that lands.
 """
 
 from __future__ import annotations
