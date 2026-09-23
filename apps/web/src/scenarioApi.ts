@@ -2,11 +2,19 @@ import type { DamageState } from "./damageColors";
 
 // Client for the scenario function (services/scenario). Defaults to the
 // local dev server (uvicorn scenario.local:app); override via
-// VITE_SCENARIO_API_URL for a deployed Lambda Function URL. Exported: also
-// used by DamageMap.tsx to build the per-scenario tile-join URL template
-// (GET /tiles/{scenario_id}/{z}/{x}/{y}.mvt), the same base every other
-// request here goes through.
+// VITE_SCENARIO_API_URL for a deployed Lambda Function URL.
 export const API_URL = import.meta.env.VITE_SCENARIO_API_URL ?? "http://localhost:8000";
+
+// Client for the tiles function (services/tiles) -- a separate deployed
+// Lambda from the scenario one above (see infra/stacks/twin_r_stack.py's
+// own comment on why: no openquake/numpy/scipy weight, fast cold start,
+// doesn't compete with scenario compute for concurrency). Defaults to the
+// *same* local dev server as API_URL, since local.py serves both
+// /scenarios/* and /tiles/* itself (no separate local process) -- only
+// diverges from API_URL when VITE_TILES_API_URL is set, i.e. in the cloud.
+// Used by DamageMap.tsx to build the per-scenario tile-join URL template
+// (GET /tiles/{scenario_id}/{z}/{x}/{y}.mvt).
+export const TILES_API_URL = import.meta.env.VITE_TILES_API_URL ?? API_URL;
 
 // MERISUR's three selectable scenario probability levels
 // (services/scenario/probability_level.py, docs/merisur.md §4.7): "high"
@@ -83,13 +91,13 @@ export interface MunicipalityStats {
 }
 
 export interface ScenarioResult {
-  // Keys this run's files under results/<scenario_id>/ (services/scenario/
-  // results_store.py) -- not yet used for anything on the frontend, but
-  // will address the per-scenario tile-join endpoint (GET
-  // /tiles/{scenario_id}/{z}/{x}/{y}.mvt) once DamageMap switches to it.
-  // Optional: only local.py sets it today -- handler.py's deployed Lambda
-  // path doesn't write to results_store.py yet (local-only for now, see
-  // the results-pipeline plan).
+  // Addresses this scenario's results in the per-scenario tile-join
+  // endpoint (GET /tiles/{scenario_id}/{z}/{x}/{y}.mvt -- DamageMap.tsx's
+  // buildings source). Both local.py and the deployed handler.py set this
+  // (services/scenario/results_store.py locally, services/tiles'
+  // S3-backed version in the cloud) -- not optional in practice, but kept
+  // so a caller that somehow gets an older/malformed response doesn't
+  // crash on a missing field.
   scenario_id?: string;
   rupture: {
     lat: number;

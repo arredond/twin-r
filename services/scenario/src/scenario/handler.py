@@ -30,6 +30,7 @@ import gzip
 import json
 import os
 import re
+import uuid
 
 from .building_lookup import get_building
 from .faults import get_fault, load_nearby_faults
@@ -165,7 +166,26 @@ def _run_and_respond(rupture: Rupture, probability_level: str) -> dict:
     n_evaluated = len(result)
     municipality_stats = compute_municipality_stats(result)
     result = prepare_response_buildings(result)
+
+    # Random for now, same "not yet content-addressed" caveat as local.py's
+    # own scenario_id -- see that module's comment on the future plan to
+    # hash scenario characteristics + data/pipeline version into it instead.
+    scenario_id = uuid.uuid4().hex
+    if RESULTS_BUCKET is not None:
+        # Deferred import, same reasoning as engine/ground_motion above --
+        # keeps pandas/boto3 out of the cold-path routes that never reach
+        # this function. Writes the same status.json/municipality_stats.json/
+        # buildings.parquet layout local dev's results_store.py writes to
+        # local disk, so the tiles Lambda (services/tiles) can read a prod
+        # scenario's results the same way it reads a local one.
+        from tiles.results_store import init_scenario, write_buildings, write_municipality_stats
+
+        init_scenario(RESULTS_BUCKET, scenario_id)
+        write_municipality_stats(RESULTS_BUCKET, scenario_id, municipality_stats)
+        write_buildings(RESULTS_BUCKET, scenario_id, result)
+
     payload = {
+        "scenario_id": scenario_id,
         "rupture": {
             "lat": rupture.lat,
             "lon": rupture.lon,
@@ -183,18 +203,19 @@ def _run_and_respond(rupture: Rupture, probability_level: str) -> dict:
     if RESULTS_BUCKET is None:
         return _response(200, payload)
 
-    return _response(200, _write_to_s3(payload))
+    return _response(200, _write_large_payload_to_s3(payload, scenario_id))
 
 
-def _write_to_s3(payload: dict) -> dict:
-    import uuid
-
+def _write_large_payload_to_s3(payload: dict, scenario_id: str) -> dict:
     # Not a project dependency on purpose (ADR-0001): the Lambda Python
     # runtime bundles boto3 already, so we don't ship/pin it ourselves.
     # Unresolvable for local type checking as a result.
     import boto3  # pyrefly: ignore
 
-    key = f"scenarios/{uuid.uuid4()}.json"
+    # Keyed by the same scenario_id as the results_store.py writes above
+    # (not an independent uuid) -- one id per scenario run, not two, makes
+    # tracing a request through CloudWatch/S3 straightforward.
+    key = f"scenarios/{scenario_id}.json"
     # `endpoint_url` matters specifically for `generate_presigned_url`
     # below: boto3's default S3 client signs presigned URLs against the
     # *global* `s3.amazonaws.com` endpoint regardless of `region_name`,
@@ -222,6 +243,10 @@ def _write_to_s3(payload: dict) -> dict:
         Params={"Bucket": RESULTS_BUCKET, "Key": key},
         ExpiresIn=300,
     )
+    # scenario_id isn't repeated at this outer level -- scenarioApi.ts's
+    # resolveScenarioResult only ever reads `result_url` off this wrapper
+    # and returns the *fetched* JSON (which already has scenario_id, set
+    # on `payload` above) as the real ScenarioResult.
     return {"result_url": result_url}
 
 

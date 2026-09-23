@@ -22,6 +22,12 @@ docs/deploy-aws-setup.md).
    - `VITE_SCENARIO_API_URL` — the `ScenarioFunctionUrl` CDK output from
      `deploy-aws-setup.md` step 7 (e.g.
      `https://xxxxxxxx.lambda-url.eu-west-1.on.aws/`)
+   - `VITE_TILES_API_URL` — the `TilesFunctionUrl` CDK output, same step
+     (a separate Lambda/Function URL from the scenario one above -- see
+     infra/stacks/twin_r_stack.py's own comment on why they're split).
+     Falls back to `VITE_SCENARIO_API_URL` if unset, which is wrong in
+     production (that's the scenario function's URL, not the tiles one) --
+     always set this explicitly for a real deploy.
    - `VITE_BUILDINGS_PMTILES_URL` — `https://<DataBucketName>.s3.<region>.amazonaws.com/tiles/buildings.pmtiles`
    - `VITE_DEBRIS_PMTILES_URL` — same bucket, `tiles/debris.pmtiles`
    - `VITE_MUNICIPALITIES_PMTILES_URL` — same bucket, `tiles/municipalities.pmtiles`

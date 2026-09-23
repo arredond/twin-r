@@ -18,9 +18,11 @@ from aws_cdk import aws_ecr_assets as ecr_assets
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_s3 as s3
+from aws_cdk.aws_lambda_python_alpha import PythonFunction
 from constructs import Construct
 
 SCENARIO_SERVICE_DIR = Path(__file__).resolve().parents[2] / "services" / "scenario"
+TILES_SERVICE_DIR = Path(__file__).resolve().parents[2] / "services" / "tiles"
 
 # The Cloudflare Pages frontend origin, allowed to fetch PMTiles/parquet
 # directly out of the data bucket (browser range requests -- see
@@ -188,6 +190,58 @@ class TwinRStack(Stack):
         # browser -- write-only would sign a URL that 403s on use.
         results_bucket.grant_read_write(scenario_fn)
 
+        # Deliberately a separate, lightweight (zip-packaged, not
+        # container-image) Lambda from scenario_fn above -- that one pulls
+        # in openquake.hazardlib/numpy/scipy/fiona/GDAL (confirmed 7-9s+
+        # cold starts even for its own routes that never touch physics,
+        # see services/scenario/handler.py's own comment on why
+        # engine.py/ground_motion.py are imported lazily there). This
+        # function needs only pandas/pmtiles/mapbox_vector_tile's protobuf
+        # schema (services/tiles' own tile_join.py), so its cold start and
+        # deployment package stay small regardless of how heavy the
+        # compute Lambda gets, and a tile-request burst (a zoomed map
+        # fires a dozen-plus at once) never competes with scenario compute
+        # for the same function's concurrency/memory budget.
+        tiles_fn = PythonFunction(
+            self,
+            "TilesFunction",
+            # `entry` must be the directory containing both the handler
+            # module and a requirements.txt/uv.lock the bundler can find
+            # (see services/tiles/src/requirements.txt's own comment on
+            # why it lives here and not up at services/tiles/pyproject.toml,
+            # a src-layout package) -- points at `src/`, not the package
+            # root, so `tiles/` (with its own __init__.py) lands at the
+            # Lambda's package root and `tiles.handler.handler` resolves.
+            entry=str(TILES_SERVICE_DIR / "src"),
+            index="tiles/handler.py",
+            handler="handler",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            architecture=lambda_.Architecture.X86_64,
+            # No CPU/network-heavy work here (see tile_join.py's own
+            # measurements -- tens of ms per tile once warm) -- well below
+            # scenario_fn's memory, kept modest on purpose rather than
+            # copying that function's reasoning over.
+            memory_size=512,
+            timeout=Duration.seconds(10),
+            environment={
+                "TWIN_R_DATA_BUCKET": data_bucket.bucket_name,
+                "TWIN_R_RESULTS_BUCKET": results_bucket.bucket_name,
+            },
+        )
+        # Read-only both ways -- this function never writes to either
+        # bucket, only scenario_fn (results) and the pipelines (data) do.
+        data_bucket.grant_read(tiles_fn)
+        results_bucket.grant_read(tiles_fn)
+
+        tiles_function_url = tiles_fn.add_function_url(
+            auth_type=lambda_.FunctionUrlAuthType.NONE,  # MVP: no auth yet, see milestone-1-plan §8
+            cors=lambda_.FunctionUrlCorsOptions(
+                allowed_origins=FRONTEND_ORIGINS,
+                allowed_methods=[lambda_.HttpMethod.GET],
+                allowed_headers=["content-type"],
+            ),
+        )
+
         function_url = scenario_fn.add_function_url(
             auth_type=lambda_.FunctionUrlAuthType.NONE,  # MVP: no auth yet, see milestone-1-plan §8
             # Without this, the browser fetch from scenarioApi.ts fails
@@ -206,3 +260,4 @@ class TwinRStack(Stack):
         CfnOutput(self, "DataBucketName", value=data_bucket.bucket_name)
         CfnOutput(self, "ResultsBucketName", value=results_bucket.bucket_name)
         CfnOutput(self, "ScenarioFunctionUrl", value=function_url.url)
+        CfnOutput(self, "TilesFunctionUrl", value=tiles_function_url.url)

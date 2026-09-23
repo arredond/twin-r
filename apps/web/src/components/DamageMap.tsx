@@ -6,8 +6,8 @@ import { Protocol } from "pmtiles";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { DAMAGE_COLORS, DAMAGE_STATES, DEBRIS_COLOR } from "../damageColors";
 import {
-  API_URL,
   getBuildingInfo,
+  TILES_API_URL,
   type BuildingDamageResult,
   type EvaluatedRegion,
   type Fault,
@@ -474,7 +474,7 @@ function addBuildingsSourceAndLayers(map: MapLibreMap, scenarioId: string | null
     type: "vector",
     ...(scenarioId
       ? {
-          tiles: [`${API_URL}/tiles/${scenarioId}/{z}/{x}/{y}.mvt`],
+          tiles: [`${TILES_API_URL}/tiles/${scenarioId}/{z}/{x}/{y}.mvt`],
           // A plain `tiles` array source has no TileJSON/PMTiles header to
           // read a real maxzoom from -- MapLibre defaults it to 22, which
           // made it request genuine z15+ tiles from tile_join.py instead

@@ -158,9 +158,13 @@ aws s3 cp data/faults/qafi_faults.parquet \
 aws s3 cp data/exposure/municipalities.parquet \
     s3://<DataBucketName>/exposure/municipalities.parquet --profile twin-r-admin
 
-# PMTiles the frontend fetches directly (not read by the Lambda) --
-# these can go anywhere convenient in the bucket; match whatever you set
-# VITE_*_PMTILES_URL to.
+# PMTiles the frontend fetches directly, EXCEPT buildings.pmtiles below,
+# which the tiles Lambda (services/tiles) also range-reads server-side for
+# the per-scenario tile-join endpoint -- its key must match
+# TWIN_R_BUILDINGS_PMTILES_KEY (infra/stacks/twin_r_stack.py; defaults to
+# this exact path, "tiles/buildings.pmtiles", so no override needed if you
+# don't move it). debris.pmtiles/municipalities.pmtiles can go anywhere
+# convenient; match whatever you set VITE_*_PMTILES_URL to.
 aws s3 cp data/exposure/buildings.pmtiles \
     s3://<DataBucketName>/tiles/buildings.pmtiles --profile twin-r-admin
 aws s3 cp data/exposure/debris.pmtiles \

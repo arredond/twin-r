@@ -34,6 +34,7 @@ project-includes = ["services/**", "pipelines/**", "infra/**"]
 project-excludes = ["**/.venv/**", "**/node_modules/**", "**/*.egg-info/**"]
 search-path = [
     "services/scenario/src",
+    "services/tiles/src",
     "pipelines/faults/src",
     "pipelines/exposure/src",
     "pipelines/fragility/src",

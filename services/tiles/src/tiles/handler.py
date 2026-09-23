@@ -37,7 +37,9 @@ from .s3_pmtiles import s3_source
 from .tile_join import join_tile_bytes
 
 DATA_BUCKET = os.environ["TWIN_R_DATA_BUCKET"]
-BUILDINGS_PMTILES_KEY = os.environ.get("TWIN_R_BUILDINGS_PMTILES_KEY", "exposure/buildings.pmtiles")
+# Matches docs/deploy-aws-setup.md's own upload target
+# (`aws s3 cp data/exposure/buildings.pmtiles s3://<DataBucketName>/tiles/buildings.pmtiles`).
+BUILDINGS_PMTILES_KEY = os.environ.get("TWIN_R_BUILDINGS_PMTILES_KEY", "tiles/buildings.pmtiles")
 RESULTS_BUCKET = os.environ["TWIN_R_RESULTS_BUCKET"]
 
 _ROUTE_RE = re.compile(r"^/tiles/(?P<scenario_id>[^/]+)/(?P<z>\d+)/(?P<x>\d+)/(?P<y>\d+)\.mvt$")
