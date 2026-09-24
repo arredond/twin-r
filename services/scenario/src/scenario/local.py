@@ -83,7 +83,7 @@ EXPOSURE_PATH = os.environ.get("TWINER_EXPOSURE_PATH", f"{DATA_DIR}/exposure/exp
 FRAGILITY_PATH = os.environ.get("TWINER_FRAGILITY_PATH", f"{DATA_DIR}/fragility/fragility.parquet")
 FAULTS_PATH = os.environ.get("TWINER_FAULTS_PATH", f"{DATA_DIR}/faults/qafi_faults.parquet")
 # The same static buildings.pmtiles the frontend already loads directly
-# (apps/web's VITE_BUILDINGS_PMTILES_URL) -- tile_join.py reads individual
+# (apps/web's pmtilesUrl, via VITE_S3_DATA_BUCKET) -- tile_join.py reads individual
 # tiles from it and joins in a scenario's results, never re-tiling.
 BUILDINGS_PMTILES_PATH = os.environ.get(
     "TWINER_BUILDINGS_PMTILES_PATH", f"{DATA_DIR}/exposure/buildings.pmtiles"

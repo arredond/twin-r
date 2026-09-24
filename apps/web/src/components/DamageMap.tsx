@@ -14,6 +14,23 @@ import {
   type MunicipalityStats,
 } from "../scenarioApi";
 
+// All three PMTiles archives (buildings/debris/municipalities, below) live
+// under `tiles/` in the public data bucket (ADR-0016). Deployed builds set
+// just VITE_S3_DATA_BUCKET (the stack's `DataBucketName` output); unset,
+// local dev serves them from apps/web/public/data instead. The region is
+// hardcoded rather than a second env var: it must match the stack's region
+// (infra/, deployed to eu-south-2), and eu-south-2 is an opt-in region --
+// S3's region-less `<bucket>.s3.amazonaws.com` endpoint 400s for it, so the
+// URL can't just leave it out.
+const S3_DATA_BUCKET_REGION = "eu-south-2";
+
+function pmtilesUrl(filename: string): string {
+  const bucket = import.meta.env.VITE_S3_DATA_BUCKET;
+  return bucket
+    ? `https://${bucket}.s3.${S3_DATA_BUCKET_REGION}.amazonaws.com/tiles/${filename}`
+    : `/data/${filename}`;
+}
+
 // Precomputed-tiling architecture (docs/decisions/0003-precomputed-building-tiles.md):
 // building geometry is a static PMTiles layer, tiled once offline by the
 // exposure pipeline. Once a scenario has run, its own results are joined
@@ -25,8 +42,7 @@ import {
 // design, which didn't scale past ~100k affected buildings). Before any
 // scenario has run, the map falls back to the plain static PMTiles archive
 // with no join.
-const BUILDINGS_PMTILES_URL =
-  import.meta.env.VITE_BUILDINGS_PMTILES_URL ?? "/data/buildings.pmtiles";
+const BUILDINGS_PMTILES_URL = pmtilesUrl("buildings.pmtiles");
 
 const BUILDINGS_SOURCE_ID = "buildings";
 const BUILDINGS_LAYER_ID = "buildings-fill";
@@ -53,7 +69,7 @@ const SELECTED_OUTLINE_PAINT: maplibregl.ExpressionSpecification = [
 // expression shows only the one ring matching that code (each ring's
 // geometry is cumulative -- 0m to the ring's own distance -- so the
 // matching ring already covers everything a lower ring would show).
-const DEBRIS_PMTILES_URL = import.meta.env.VITE_DEBRIS_PMTILES_URL ?? "/data/debris.pmtiles";
+const DEBRIS_PMTILES_URL = pmtilesUrl("debris.pmtiles");
 const DEBRIS_SOURCE_ID = "debris";
 const DEBRIS_LAYER_ID = "debris-fill";
 const DEBRIS_OUTLINE_LAYER_ID = "debris-selected-outline";
@@ -69,8 +85,7 @@ const DEBRIS_RING_OPACITY = 1;
 // counts) comes from the current scenario's `municipality_stats` and is
 // set as feature-state, same promoteId-keyed pattern as buildings' damage
 // color.
-const MUNICIPALITIES_PMTILES_URL =
-  import.meta.env.VITE_MUNICIPALITIES_PMTILES_URL ?? "/data/municipalities.pmtiles";
+const MUNICIPALITIES_PMTILES_URL = pmtilesUrl("municipalities.pmtiles");
 const MUNICIPALITIES_SOURCE_ID = "municipalities";
 const MUNICIPALITIES_LAYER_ID = "municipalities-fill";
 

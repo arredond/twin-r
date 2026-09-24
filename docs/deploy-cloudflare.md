@@ -31,9 +31,11 @@ docs/deploy-aws-setup.md).
      Falls back to `VITE_SCENARIO_API_URL` if unset, which is wrong in
      production (that's the scenario function's URL, not the tiles one) --
      always set this explicitly for a real deploy.
-   - `VITE_BUILDINGS_PMTILES_URL` — `https://<DataBucketName>.s3.<region>.amazonaws.com/tiles/buildings.pmtiles`
-   - `VITE_DEBRIS_PMTILES_URL` — same bucket, `tiles/debris.pmtiles`
-   - `VITE_MUNICIPALITIES_PMTILES_URL` — same bucket, `tiles/municipalities.pmtiles`
+   - `VITE_S3_DATA_BUCKET` — the `DataBucketName` CDK output. The
+     frontend builds all three PMTiles URLs (`tiles/buildings.pmtiles`,
+     `tiles/debris.pmtiles`, `tiles/municipalities.pmtiles`) from it, with
+     the region hardcoded to `eu-south-2` in `DamageMap.tsx` — update that
+     constant if the stack ever moves region.
 
    These match the `import.meta.env.VITE_*` reads already in
    `scenarioApi.ts`/`DamageMap.tsx` — no code change needed once they're
@@ -44,9 +46,7 @@ docs/deploy-aws-setup.md).
    ```
    VITE_SCENARIO_API_URL=https://naw44z44znff5je2ohuyyai7ce0gwpiu.lambda-url.eu-south-2.on.aws/
    VITE_TILES_API_URL=https://y76dsobafxm4ibmxcoif5crxsy0dsysg.lambda-url.eu-south-2.on.aws/
-   VITE_BUILDINGS_PMTILES_URL=https://twinr-mvp-databuckete3889a50-qnfinvnljqx9.s3.eu-south-2.amazonaws.com/tiles/buildings.pmtiles
-   VITE_DEBRIS_PMTILES_URL=https://twinr-mvp-databuckete3889a50-qnfinvnljqx9.s3.eu-south-2.amazonaws.com/tiles/debris.pmtiles
-   VITE_MUNICIPALITIES_PMTILES_URL=https://twinr-mvp-databuckete3889a50-qnfinvnljqx9.s3.eu-south-2.amazonaws.com/tiles/municipalities.pmtiles
+   VITE_S3_DATA_BUCKET=twinr-mvp-databuckete3889a50-qnfinvnljqx9
    ```
 4. Deploy. Cloudflare builds and gives you a `*.pages.dev` URL. Only the
    static shell is testable there: `FRONTEND_ORIGINS` (step 3 below)

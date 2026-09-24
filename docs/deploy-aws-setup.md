@@ -163,8 +163,10 @@ aws s3 cp data/exposure/municipalities.parquet \
 # the per-scenario tile-join endpoint -- its key must match
 # TWINER_BUILDINGS_PMTILES_KEY (infra/stacks/twiner_stack.py; defaults to
 # this exact path, "tiles/buildings.pmtiles", so no override needed if you
-# don't move it). debris.pmtiles/municipalities.pmtiles can go anywhere
-# convenient; match whatever you set VITE_*_PMTILES_URL to.
+# don't move it). debris.pmtiles/municipalities.pmtiles must sit next to it
+# under tiles/ too: the frontend derives all three URLs from
+# VITE_S3_DATA_BUCKET + these fixed keys (apps/web DamageMap.tsx's
+# pmtilesUrl).
 aws s3 cp data/exposure/buildings.pmtiles \
     s3://<DataBucketName>/tiles/buildings.pmtiles --profile twiner-admin
 aws s3 cp data/exposure/debris.pmtiles \

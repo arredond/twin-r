@@ -77,7 +77,7 @@ Linux container pulls a manylinux wheel with GDAL bundled in, no
 **Frontend**: Cloudflare Pages, built from `apps/web` (`npm run build`),
 served at `twiner.arredon.do` via a CNAME onto Pages' subdomain (Cloudflare
 manages the certificate automatically once the zone is on Cloudflare and
-the CNAME is set). `VITE_SCENARIO_API_URL`/`VITE_*_PMTILES_URL` are Pages
+the CNAME is set). `VITE_SCENARIO_API_URL`/`VITE_TILES_API_URL`/`VITE_S3_DATA_BUCKET` are Pages
 build-time environment variables pointing at the Lambda Function URL and
 the public data bucket, matching the existing `import.meta.env.VITE_*`
 pattern `scenarioApi.ts`/`DamageMap.tsx` already use for local dev.

@@ -20,9 +20,7 @@ npm run dev
 Env vars (optional, `.env.local`):
 
 - `VITE_SCENARIO_API_URL` -- scenario function base URL (default `http://localhost:8000`)
-- `VITE_BUILDINGS_PMTILES_URL` -- buildings PMTiles URL (default `/data/buildings.pmtiles`)
-- `VITE_DEBRIS_PMTILES_URL` -- debris PMTiles URL (default `/data/debris.pmtiles`)
-- `VITE_MUNICIPALITIES_PMTILES_URL` -- municipal boundaries PMTiles URL (default `/data/municipalities.pmtiles`)
+- `VITE_S3_DATA_BUCKET` -- the public data bucket's name (the stack's `DataBucketName` output); buildings/debris/municipalities PMTiles are read from its `tiles/` prefix in eu-south-2. Unset: served locally from `/data/*.pmtiles` (`apps/web/public/data`)
 
 ## Known gotcha
 

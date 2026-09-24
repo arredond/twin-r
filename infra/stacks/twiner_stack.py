@@ -28,7 +28,7 @@ TILES_SERVICE_DIR = REPO_ROOT / "services" / "tiles"
 # The Cloudflare Pages frontend origin, allowed to fetch PMTiles/parquet
 # directly out of the data bucket (browser range requests -- see
 # apps/web's pmtiles/DuckDB-over-httpfs usage). localhost:5173 stays
-# allowed too so local dev can point VITE_*_PMTILES_URL at the real bucket
+# allowed too so local dev can point VITE_S3_DATA_BUCKET at the real bucket
 # without a CORS error. Update this if the Cloudflare domain changes.
 FRONTEND_ORIGINS = ["https://twiner.arredon.do", "http://localhost:5173"]
 
