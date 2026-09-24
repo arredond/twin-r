@@ -5,6 +5,7 @@ import { PROBABILITY_LEVEL_LABELS } from "./probabilityLevels";
 import { DamageLegend } from "./components/DamageLegend";
 import {
   listFaults,
+  warmUpScenarioApi,
   runFaultScenario,
   runManualScenario,
   type Fault,
@@ -68,6 +69,7 @@ export default function App() {
     listFaults()
       .then(setFaults)
       .catch((e) => setFaultsError(e instanceof Error ? e.message : String(e)));
+    warmUpScenarioApi();
   }, []);
 
   async function runScenario(run: () => Promise<ScenarioResult>) {

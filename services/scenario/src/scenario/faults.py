@@ -22,6 +22,8 @@ cached by fault_id alone (docs/decisions/0018-scenario-result-cache.md).
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 from .db import ensure_httpfs, ensure_spatial, get_connection
@@ -77,6 +79,25 @@ def load_faults(faults_path: str) -> pd.DataFrame:
         )
         .df()
     )
+
+
+def faults_payload(faults_path: str) -> dict:
+    """The `GET /faults` response body: `{"faults": [...]}`, one record per
+    `load_faults` row. Shared by the route (handler.py/local.py) and by
+    `export_faults`, which writes it as the static `faults.json` the
+    frontend loads on startup, so the two can't disagree.
+
+    Missing values (e.g. a fault without a dip or depths, i.e. without
+    rupture geometry) become `None`/null: pandas hands them back as float
+    NaN, which `json.dumps` would write as a bare `NaN` that browsers'
+    JSON.parse rejects."""
+    records = load_faults(faults_path).to_dict(orient="records")
+    return {
+        "faults": [
+            {k: None if isinstance(v, float) and math.isnan(v) else v for k, v in r.items()}
+            for r in records
+        ]
+    }
 
 
 def get_fault(

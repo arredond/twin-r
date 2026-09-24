@@ -230,9 +230,12 @@ def _joined_buildings(body: dict) -> list[dict]:
     but still exactly the "damaged or genuinely uncertain" set these tests
     pin down."""
     from scenario import results_store
+    from tiles import scenario_results
 
-    path = results_store.scenario_dir(body["scenario_id"]) / "buildings.json.gz"
-    return json.loads(gzip.decompress(path.read_bytes()))
+    path = results_store.scenario_dir(body["scenario_id"]) / scenario_results.FILENAME
+    columns = json.loads(gzip.decompress(path.read_bytes()))["columns"]
+    # One dict per building, as the tests below read them.
+    return [dict(zip(columns, row, strict=True)) for row in zip(*columns.values(), strict=True)]
 
 
 def test_scenario_response_carries_no_per_building_list(client):

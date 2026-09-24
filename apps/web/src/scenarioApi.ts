@@ -1,4 +1,5 @@
 import type { DamageState } from "./damageColors";
+import { staticDataUrl } from "./staticData";
 
 // Client for the scenario function (services/scenario). Defaults to the
 // local dev server (uvicorn scenario.local:app); override via
@@ -176,7 +177,18 @@ export function runFaultScenario(
 // Every fault in the dataset (QAFI v4: 201 nationwide), sorted by name --
 // small enough to load once. Ordering relative to the map view happens
 // client-side (App.tsx's sortFaultsByDistance), not by refetching.
+//
+// Read from the static faults.json next to the PMTiles (ADR-0022), so
+// opening the app doesn't wait on a scenario-Lambda cold start. Same body
+// as `GET /faults` (services/scenario/export_faults.py), which stays as the
+// fallback if the static file is missing (e.g. not exported yet locally).
 export async function listFaults(): Promise<Fault[]> {
+  try {
+    const resp = await fetch(staticDataUrl("faults.json"));
+    if (resp.ok) return (await resp.json()).faults;
+  } catch {
+    // Network error or unparseable body: fall through to the API.
+  }
   const resp = await fetch(`${API_URL}/faults`);
   if (!resp.ok) {
     const detail = await resp.text();
@@ -184,6 +196,16 @@ export async function listFaults(): Promise<Fault[]> {
   }
   const data = await resp.json();
   return data.faults;
+}
+
+// Fire-and-forget, once on page load (App.tsx): gets a scenario-Lambda
+// execution environment through its one-time setup (hazardlib import,
+// numba cache, DuckDB extensions -- services/scenario/warmup.py) while the
+// user is still looking at the map, so their first scenario doesn't pay
+// for it. Never awaited and never surfaces an error: a failed warm-up
+// only means the first scenario request is slower.
+export function warmUpScenarioApi(): void {
+  fetch(`${API_URL}/warmup`).catch(() => {});
 }
 
 // Static exposure attributes for one building (taxonomy_class/height_class

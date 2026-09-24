@@ -240,12 +240,19 @@ class TwinerStack(Stack):
             handler="handler",
             runtime=lambda_.Runtime.PYTHON_3_12,
             architecture=lambda_.Architecture.X86_64,
-            # No CPU/network-heavy work here (see tile_join.py's own
-            # measurements -- tens of ms per tile once warm) -- well below
-            # scenario_fn's memory, kept modest on purpose rather than
-            # copying that function's reasoning over.
-            memory_size=512,
-            timeout=Duration.seconds(10),
+            # A warm tile is tens of ms (tile_join.py's own measurements),
+            # but a container's *first* tile for a scenario loads that
+            # scenario's whole results file (tiles.results_store.
+            # read_building_results): 448,557 rows for an M9 on Madrid.
+            # At 512MB (~0.3 vCPU) that took 8.7-10s per container, hit
+            # the old 10s timeout, and OOM-killed containers
+            # (2026-09-24). 1769MB is the point where Lambda allots one
+            # full vCPU (~3.5x the CPU, similar cost for CPU-bound work
+            # since requests finish sooner) and leaves room for a large
+            # scenario's parsed results. The 30s timeout keeps a slow first
+            # load a slow tile rather than a failed one.
+            memory_size=1769,
+            timeout=Duration.seconds(30),
             environment={
                 # buildings.pmtiles and debris.pmtiles are read from their
                 # default keys (tiles/*.pmtiles, services/tiles/handler.py),

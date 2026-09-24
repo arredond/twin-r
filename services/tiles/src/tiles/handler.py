@@ -23,9 +23,10 @@ Serves two routes, one per archive:
 
 Exposure/fragility/faults parquet paths come from environment variables in
 services/scenario's Lambda -- this one only needs the data bucket (for
-buildings.pmtiles) and the results bucket (for a scenario's thin
-buildings.json, written by services/scenario/handler.py's compute path
-via this package's own results_store.py), both via env vars for the same
+buildings.pmtiles) and the results bucket (for a scenario's per-building
+results file, `scenario_results.FILENAME`, written by services/scenario/
+handler.py's compute path via this package's own results_store.py), both
+via env vars for the same
 local/cloud parity reason.
 """
 

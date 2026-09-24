@@ -29,6 +29,9 @@ alone for that same 22,231-feature tile.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any, Protocol
+
 from mapbox_vector_tile.Mapbox import vector_tile_pb2 as mvt_pb2
 
 # The generated protobuf message class. protoc-generated modules build their
@@ -37,19 +40,28 @@ Tile = mvt_pb2.tile  # pyrefly: ignore
 
 _BUILDINGS_LAYER_NAME = "buildings"
 _DEBRIS_LAYER_NAME = "debris"
+
+
+class ResultsLookup(Protocol):
+    """What a join needs from a scenario's results: one building's extra
+    tile properties by id, or None if it isn't listed. Satisfied by
+    `scenario_results.ScenarioResults` and by a plain `dict[str, dict]`."""
+
+    def get(self, building_id: str, /) -> Mapping[str, Any] | None: ...
+
+
 _BUILDING_ID_KEY = "building_id"
 _RING_KEY = "ring"
 _DAMAGE_STATE_CODE_KEY = "damage_state_code"
 
 
-def join_tile_bytes(raw_tile_bytes: bytes, results: dict[str, dict]) -> bytes:
+def join_tile_bytes(raw_tile_bytes: bytes, results: ResultsLookup) -> bytes:
     """`raw_tile_bytes` is one MVT tile, already gunzipped if the source
-    archive's tile_compression called for it. `results` is building_id ->
-    a plain dict of extra tile properties (e.g. damage_state_code/prob_*)
-    -- typically `df.to_dict(orient="index")` off a scenario's thin
-    buildings.json, so values are already plain Python bool/int/float,
-    never numpy scalar types (the protobuf setters below would reject
-    those)."""
+    archive's tile_compression called for it. `results` maps building_id ->
+    a plain dict of extra tile properties (damage_state_code/prob_*) --
+    in practice a `scenario_results.ScenarioResults`, decoded from JSON, so
+    values are plain Python int/float, never numpy scalar types (the
+    protobuf setters below would reject those)."""
     tile = Tile()
     tile.ParseFromString(raw_tile_bytes)
     for layer in tile.layers:
@@ -58,7 +70,7 @@ def join_tile_bytes(raw_tile_bytes: bytes, results: dict[str, dict]) -> bytes:
     return tile.SerializeToString()
 
 
-def join_debris_tile_bytes(raw_tile_bytes: bytes, results: dict[str, dict]) -> bytes:
+def join_debris_tile_bytes(raw_tile_bytes: bytes, results: ResultsLookup) -> bytes:
     """The debris.pmtiles counterpart of `join_tile_bytes` (ADR-0010 rings,
     four features per building sharing one `building_id`, `ring` 1-4 =
     the damage state that first produces it). Same `results` shape.
@@ -112,7 +124,7 @@ def _pb_value_key(value_pb) -> tuple[str, object] | None:
     return None  # double/uint/sint -- never produced here, not worth dedup-matching
 
 
-def _join_layer(layer, results: dict[str, dict]) -> None:
+def _join_layer(layer, results: ResultsLookup) -> None:
     """Mutates `layer` in place: for each feature whose `building_id` tag
     has a matching scenario result, appends that result's fields as new
     tag pairs. Geometry is never read or touched."""
@@ -172,7 +184,7 @@ def _join_layer(layer, results: dict[str, dict]) -> None:
         feature.tags.extend(new_tags)
 
 
-def _join_debris_layer(layer, results: dict[str, dict]) -> None:
+def _join_debris_layer(layer, results: ResultsLookup) -> None:
     """Mutates `layer` in place -- see `join_debris_tile_bytes`."""
     key_index = {key: i for i, key in enumerate(layer.keys)}
     building_id_key_idx = key_index.get(_BUILDING_ID_KEY)

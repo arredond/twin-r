@@ -165,14 +165,27 @@ aws s3 cp data/exposure/municipalities.parquet \
 # this exact path, "tiles/buildings.pmtiles", so no override needed if you
 # don't move it). debris.pmtiles/municipalities.pmtiles must sit next to it
 # under tiles/ too: the frontend derives all three URLs from
-# VITE_S3_DATA_BUCKET + these fixed keys (apps/web DamageMap.tsx's
-# pmtilesUrl).
+# VITE_S3_DATA_BUCKET + these fixed keys (apps/web/src/staticData.ts's
+# staticDataUrl).
 aws s3 cp data/exposure/buildings.pmtiles \
     s3://<DataBucketName>/tiles/buildings.pmtiles --profile twiner-admin
 aws s3 cp data/exposure/debris.pmtiles \
     s3://<DataBucketName>/tiles/debris.pmtiles --profile twiner-admin
 aws s3 cp data/exposure/municipalities.pmtiles \
     s3://<DataBucketName>/tiles/municipalities.pmtiles --profile twiner-admin
+
+# The fault list the frontend loads on startup (ADR-0022), next to the
+# PMTiles. Re-export and re-upload it whenever qafi_faults.parquet changes;
+# the frontend falls back to GET /faults if it's missing, but won't notice
+# if it's stale. Stored gzipped (~177KB vs ~456KB) with Content-Encoding
+# so browsers decompress it transparently; short max-age so a re-upload
+# shows up within minutes.
+uv run --package twiner-scenario python -m scenario.export_faults \
+    --out data/faults/faults.json
+gzip -9c data/faults/faults.json | aws s3 cp - \
+    s3://<DataBucketName>/tiles/faults.json --profile twiner-admin \
+    --content-type application/json --content-encoding gzip \
+    --cache-control "public, max-age=300"
 ```
 
 ## 9. Smoke-test

@@ -1,25 +1,19 @@
 """S3-backed scenario results store -- the cloud counterpart of
 services/scenario/results_store.py's local-disk version. Same key layout
-(status.json, municipality_stats.json, buildings.json.gz, response.json
+(status.json, municipality_stats.json, the per-building results file
+(`scenario_results.FILENAME`), response.json
 under `<scenario_id>/` in the results bucket) so services/scenario/handler.py
 (writes, after computing a scenario) and this package's own handler.py
 (reads, per tile request) agree on where a scenario's results live without
 either one hardcoding the other's paths.
 
-`buildings.json.gz`, not `.parquet`: this module is imported by the tiles
-Lambda (services/tiles/handler.py), which has to stay under Lambda's
-250MB zip-package size limit -- confirmed by a real deploy failure
-("Unzipped size must be smaller than 262144000 bytes") with pandas/pyarrow
-in the dependency closure (pyarrow alone is ~155MB unzipped), so this
-module never needs pandas/pyarrow/numpy at all -- `write_buildings` takes
-a plain list of dicts (the caller, services/scenario/handler.py, already
-has a DataFrame and does `.to_dict(orient="records")` itself before
-calling in, rather than this shared module importing pandas just to
-accept one either way). Gzipped because plain JSON, tried first, measured
-~5-7x larger than the parquet it replaced (real S3 storage/transfer
-bloat) -- gzip closes that gap almost entirely (parquet-sized or smaller)
-for a decompress cost still in the tens of milliseconds even at 400k
-rows. `municipality_stats.json` stays uncompressed -- at most ~8,200
+The per-building results file (`scenario_results.FILENAME`) has its own
+module, `scenario_results`, which defines its format and explains why it's
+column-oriented JSON: the tiles Lambda reads it and must stay under
+Lambda's 250MB zip-package limit, so neither module may use
+pandas/pyarrow/numpy (a real deploy failed with pandas/pyarrow in the
+closure: "Unzipped size must be smaller than 262144000 bytes").
+`municipality_stats.json` stays uncompressed -- at most ~8,200
 municipalities nationwide, small regardless of format.
 
 `boto3` isn't a project dependency on purpose (matches services/scenario/
@@ -30,12 +24,15 @@ Lambda handler, never during local dev.
 
 from __future__ import annotations
 
-import gzip
 import json
 import time
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
 
 import boto3  # pyrefly: ignore -- Lambda-runtime-provided, unresolvable for local type checking
+
+from . import scenario_results
+from .scenario_results import ScenarioResults
 
 
 def _client():
@@ -80,12 +77,13 @@ def write_municipality_stats(bucket: str, scenario_id: str, stats: list[dict]) -
     _write_status(bucket, scenario_id, municipal_stats_ready=True)
 
 
-def write_buildings(bucket: str, scenario_id: str, buildings: list[dict]) -> None:
-    raw = json.dumps(buildings).encode("utf-8")
+def write_buildings(bucket: str, scenario_id: str, columns: Mapping[str, Sequence]) -> None:
+    """`columns`: the listed buildings, one sequence per
+    `scenario_results.COLUMNS` entry (e.g. a pyarrow Table's `to_pydict()`)."""
     _client().put_object(
         Bucket=bucket,
-        Key=_key(scenario_id, "buildings.json.gz"),
-        Body=gzip.compress(raw),
+        Key=_key(scenario_id, scenario_results.FILENAME),
+        Body=scenario_results.encode(columns),
         ContentType="application/json",
         ContentEncoding="gzip",
     )
@@ -116,24 +114,26 @@ def read_response(bucket: str, scenario_id: str) -> dict | None:
     return json.loads(obj["Body"].read())
 
 
-@lru_cache(maxsize=64)
-def read_building_results(bucket: str, scenario_id: str) -> dict[str, dict]:
-    """building_id -> the scenario's thin result row, as a plain dict of
-    extra tile properties -- the S3 equivalent of services/scenario/
+# Deliberately tiny. One scenario's results can be hundreds of MB once
+# parsed into Python dicts (an M9 manual scenario on Madrid: 448,557 rows,
+# ~326MB peak / ~206MB held), and the cache holds them for the container's
+# whole lifetime. At 64 entries, every scenario a container ever served
+# stayed resident until it was OOM-killed at 512MB (2026-09-24, 10
+# `Runtime.OutOfMemory`s). Two covers switching back and forth between a
+# pair of scenarios; anything older is re-read from S3 if revisited.
+RESULTS_CACHE_SCENARIOS = 2
+
+
+@lru_cache(maxsize=RESULTS_CACHE_SCENARIOS)
+def read_building_results(bucket: str, scenario_id: str) -> ScenarioResults:
+    """The scenario's listed buildings, looked up by building_id per tile
+    (`ScenarioResults.get`) -- the S3 equivalent of services/scenario/
     tile_join.py's `_building_results`. Cached per (bucket, scenario_id)
-    for this Lambda execution environment's lifetime (see this package's
-    handler.py), same "don't re-fetch per tile" reasoning as local dev's
-    version."""
+    for this Lambda execution environment's lifetime, so a container reads
+    a scenario's file once, not once per tile."""
     s3 = _client()
     try:
-        obj = s3.get_object(Bucket=bucket, Key=_key(scenario_id, "buildings.json.gz"))
+        obj = s3.get_object(Bucket=bucket, Key=_key(scenario_id, scenario_results.FILENAME))
     except s3.exceptions.NoSuchKey as e:
         raise FileNotFoundError(f"no results for scenario_id {scenario_id!r}") from e
-    rows = json.loads(gzip.decompress(obj["Body"].read()))
-    # keep-last: building_id isn't always unique in the pipeline output
-    # (see DATA-SOURCES.md's "non-unique building_id" known issue) --
-    # later rows overwriting earlier ones in this loop matches
-    # pandas' drop_duplicates(keep="last"), not a new decision.
-    return {
-        row["building_id"]: {k: v for k, v in row.items() if k != "building_id"} for row in rows
-    }
+    return ScenarioResults.from_bytes(obj["Body"].read())

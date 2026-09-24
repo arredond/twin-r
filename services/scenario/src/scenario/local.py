@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from .building_lookup import get_building
 from .engine import summarize_scenario
-from .faults import get_fault, load_faults, round_near_point, rupture_anchor
+from .faults import faults_payload, get_fault, round_near_point, rupture_anchor
 from .ground_motion import estimate_significant_distance_km
 from .probability_level import ProbabilityLevel, resolve_probability_level
 from .response import evaluated_region
@@ -38,6 +38,7 @@ from .results_store import (
 from .rupture import Rupture, from_fault, from_manual_input
 from .scenario_id import cache_enabled, fault_scenario_id, manual_scenario_id
 from .tile_join import join_tile, warm_cache
+from .warmup import warm_up
 
 app = FastAPI(title="twiner scenario function (local)")
 
@@ -181,8 +182,7 @@ def _run_and_serialize(rupture: Rupture, probability_level: str, scenario_id: st
         # im_type are dropped and damage_state becomes an int code).
         # Written for the tile joins (buildings + debris, ADR-0019), not
         # returned -- the frontend never needs the per-building list.
-        result = summary.shipped.to_pandas()
-        write_buildings(scenario_id, result)
+        write_buildings(scenario_id, summary.shipped.to_pydict())
         # Fire-and-forget: pays each pool worker's cold-cache cost for this
         # scenario now, in the background, rather than on the user's first
         # tile request (see warm_cache's own docstring for why this is
@@ -200,7 +200,7 @@ def _run_and_serialize(rupture: Rupture, probability_level: str, scenario_id: st
 
     print(
         f"scenario: {rupture.source} -> {n_evaluated} evaluated, "
-        f"{len(result)} sent (damaged or uncertain), "
+        f"{summary.shipped.num_rows} sent (damaged or uncertain), "
         f"finite_rupture={rupture.surface is not None}, in {elapsed_ms}ms"
     )
     payload = {
@@ -261,10 +261,9 @@ def list_faults() -> dict:
     set is small, and ordering it relative to the map view is the
     frontend's job (it already has every trace's geometry)."""
     try:
-        faults = load_faults(FAULTS_PATH)
+        return faults_payload(FAULTS_PATH)
     except FileNotFoundError as e:
         raise HTTPException(status_code=500, detail=f"missing pipeline output: {e}") from e
-    return {"faults": faults.to_dict(orient="records")}
 
 
 @app.get("/scenarios/fault")
@@ -399,6 +398,13 @@ async def _joined_tile(
         # empty, same as the static archive itself would return.
         return Response(status_code=204)
     return Response(content=tile, media_type="application/vnd.mapbox-vector-tile")
+
+
+@app.get("/warmup")
+def warmup() -> dict:
+    """See warmup.py: the frontend's fire-and-forget call on page load."""
+    data_paths = (BUILDINGS_PATH, EXPOSURE_PATH, FRAGILITY_PATH, FAULTS_PATH)
+    return warm_up(needs_httpfs=any(p.startswith("s3://") for p in data_paths))
 
 
 @app.get("/health")

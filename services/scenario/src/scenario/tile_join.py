@@ -6,10 +6,10 @@ re-tiling the whole buildings dataset per scenario (infeasible -- it'd mean
 either shipping all of buildings.pmtiles into a Lambda to re-run tippecanoe,
 or running tippecanoe synchronously in the request path), each request here
 reads exactly one static tile from the existing buildings.pmtiles, reads the
-scenario's own thin buildings.json (already filtered to just the
-damaged/uncertain buildings by response.py's `prepare_response_buildings`,
-so it's small -- tens of thousands of rows at most, not the national
-dataset), and joins the two by `building_id` before re-encoding the tile.
+scenario's own per-building results file (`tiles.scenario_results`: just
+the damaged/uncertain buildings, `response.shipped_mask` -- up to hundreds
+of thousands of rows for a large scenario, not the national dataset), and
+joins the two by `building_id` before re-encoding the tile.
 Geometry is never re-tiled; only feature properties change.
 
 Only the local I/O (mmap'd PMTiles file, local disk results/ directory)
@@ -26,11 +26,12 @@ logic (docs/decisions/0001-compute-and-iac.md).
 from __future__ import annotations
 
 import gzip
-import json
 from functools import lru_cache
 from pathlib import Path
 
 from pmtiles.reader import Compression, MmapSource, Reader
+from tiles import scenario_results
+from tiles.scenario_results import ScenarioResults
 from tiles.tile_join import join_debris_tile_bytes, join_tile_bytes
 
 from .results_store import scenario_dir
@@ -45,45 +46,31 @@ def _pmtiles_reader(path: str) -> Reader:
     return Reader(MmapSource(f))
 
 
-def _building_results(scenario_id: str) -> dict[str, dict]:
+def _building_results(scenario_id: str) -> ScenarioResults:
     """See `_load_building_results`. Keyed on the file's mtime as well as
     `scenario_id`: ids are content-addressed (scenario_id.py), so with the
     scenario cache off a rerun rewrites the *same* scenario_id's file --
     e.g. after regenerating local data without bumping TWINER_DATA_VERSION
     -- and a pool worker's cache must not keep serving the old rows."""
-    path = scenario_dir(scenario_id) / "buildings.json.gz"
+    path = scenario_dir(scenario_id) / scenario_results.FILENAME
     if not path.exists():
         raise FileNotFoundError(f"no results for scenario_id {scenario_id!r}")
     return _load_building_results(scenario_id, path.stat().st_mtime_ns)
 
 
-@lru_cache(maxsize=64)
-def _load_building_results(scenario_id: str, mtime_ns: int) -> dict[str, dict]:
-    """building_id -> the scenario's thin result row, as a plain dict of
-    extra tile properties. Cached per scenario_id (small: at most tens of
-    thousands of rows) so repeated tile requests for the same scenario --
-    the normal case, as a user pans/zooms -- don't re-read the results file
-    each time.
-
-    Gzipped JSON, not parquet -- see results_store.py's own comment on why
-    (the tiles Lambda that reads this same file shape in the cloud has to
-    stay under Lambda's 250MB zip-package limit, and pandas/pyarrow alone
-    blow past that; plain uncompressed JSON was tried first but measured
-    5-7x larger than the parquet it replaced). Reading it here also skips
-    pandas/pyarrow entirely, not just to match the cloud format -- a plain
-    dict-building loop over a JSON list is already fast enough at this
-    scale (see the note this replaced: a *pandas* `iterrows()` + per-row
-    `.drop()` loop measured 36s for 400k rows; this is a single pass
-    building plain dicts, no DataFrame construction at all)."""
-    path = scenario_dir(scenario_id) / "buildings.json.gz"
-    rows = json.loads(gzip.decompress(path.read_bytes()))
-    # keep-last: building_id isn't always unique in the pipeline output
-    # (see DATA-SOURCES.md's "non-unique building_id" known issue) --
-    # later rows overwriting earlier ones in this loop matches
-    # pandas' drop_duplicates(keep="last"), not a new decision.
-    return {
-        row["building_id"]: {k: v for k, v in row.items() if k != "building_id"} for row in rows
-    }
+# Same size as the tiles Lambda's cache (tiles.results_store's
+# RESULTS_CACHE_SCENARIOS, see its comment): a large scenario's results
+# run to hundreds of MB once parsed, per tile-pool worker process here.
+@lru_cache(maxsize=2)
+def _load_building_results(scenario_id: str, mtime_ns: int) -> ScenarioResults:
+    """The scenario's listed buildings, looked up by building_id per tile.
+    Cached per scenario_id so repeated tile requests for the same scenario
+    -- the normal case, as a user pans/zooms -- don't re-read the results
+    file each time. Same file and decoder as the tiles Lambda
+    (`tiles.scenario_results`, which documents the format and why it's
+    column-oriented JSON), so the two runtimes can't drift on it."""
+    path = scenario_dir(scenario_id) / scenario_results.FILENAME
+    return ScenarioResults.from_bytes(path.read_bytes())
 
 
 def warm_cache(pmtiles_path: str | Path, scenario_id: str) -> None:

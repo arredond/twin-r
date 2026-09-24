@@ -11,6 +11,7 @@ import base64
 import gzip
 import importlib
 import json
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -20,6 +21,7 @@ import pytest
 # Sibling test module (pytest puts tests/ on sys.path) -- reuses its
 # synthetic data fixture rather than duplicating it.
 from test_local_api import data_dir  # noqa: F401  # pyrefly: ignore
+from tiles import scenario_results
 
 BUCKET = "results-bucket"
 _FRESH_MODULES = ("tiles.results_store", "scenario.handler")
@@ -129,7 +131,7 @@ def test_fault_scenario_is_computed_once_then_served_from_s3(handler, s3: FakeS3
     scenario_id = first["scenario_id"]
     # The tile-join input and the cache entry are both in the results
     # bucket, for the backend only.
-    assert (BUCKET, f"{scenario_id}/buildings.json.gz") in s3.objects
+    assert (BUCKET, f"{scenario_id}/{scenario_results.FILENAME}") in s3.objects
     assert (BUCKET, f"{scenario_id}/response.json") in s3.objects
 
     # An ignored near point (TEST001 has full rupture geometry) still hits.
@@ -160,3 +162,53 @@ def test_near_point_matters_only_for_a_fault_without_geometry(handler):
         assert body["cached"] is False
         ids.add(body["scenario_id"])
     assert len(ids) == 2
+
+
+def test_importing_the_handler_loads_neither_numba_nor_hazardlib():
+    # Lambda's Init is just this import: numba_cache.seed() must run before
+    # anything pulls in numba, and hazardlib stays lazy (ADR-0021). A fresh
+    # interpreter, since other tests in this session already import both.
+    code = (
+        "import sys, scenario.handler; "
+        "loaded = {'numba', 'openquake.hazardlib'} & set(sys.modules); "
+        "assert not loaded, loaded"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_warmup_does_the_one_time_setup_once(handler, monkeypatch: pytest.MonkeyPatch):
+    import scenario.warmup
+
+    monkeypatch.setattr(scenario.warmup, "_warmed", False)
+    status, first = _call(handler, "/warmup")
+    assert status == 200
+    assert first["status"] == "warm" and first["already_warm"] is False
+    assert "openquake.hazardlib" in sys.modules
+
+    status, second = _call(handler, "/warmup")
+    assert status == 200 and second["already_warm"] is True
+
+
+def test_static_faults_json_is_the_faults_route_body(
+    handler,
+    data_dir: Path,  # noqa: F811 -- the fixture imported from test_local_api
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from scenario import export_faults
+
+    out = tmp_path / "faults.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_faults",
+            "--faults",
+            str(data_dir / "faults/qafi_faults.parquet"),
+            "--out",
+            str(out),
+        ],
+    )
+    export_faults.main()
+    _, body = _call(handler, "/faults")
+    assert json.loads(out.read_text()) == body

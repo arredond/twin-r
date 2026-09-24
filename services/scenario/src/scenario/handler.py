@@ -3,8 +3,8 @@
 Thin adapter only (see docs/decisions/0001-compute-and-iac.md) -- all
 domain logic lives in engine.py/rupture.py/ground_motion.py/damage.py/
 faults.py/building_lookup.py, shared with the local dev server in
-local.py. Mirrors local.py's four routes (`/scenarios/manual`, `/faults`,
-`/scenarios/fault`, `/buildings/{id}`) plus `/health`.
+local.py. Mirrors local.py's five routes (`/scenarios/manual`, `/faults`,
+`/scenarios/fault`, `/buildings/{id}`, `/warmup`) plus `/health`.
 
 A Lambda Function URL has no *routing rules* the way API Gateway does (no
 per-route Lambda mapping, no path-parameter extraction), but the event
@@ -34,11 +34,12 @@ import time
 
 from . import numba_cache
 from .building_lookup import get_building
-from .faults import get_fault, load_faults, round_near_point, rupture_anchor
+from .faults import faults_payload, get_fault, round_near_point, rupture_anchor
 from .probability_level import resolve_probability_level
 from .response import evaluated_region
 from .rupture import Rupture, from_fault, from_manual_input
 from .scenario_id import cache_enabled, fault_scenario_id, manual_scenario_id
+from .warmup import warm_up
 
 # `engine`/`ground_motion` are deliberately NOT imported at module level --
 # see _run_and_respond's own comment for why.
@@ -74,6 +75,12 @@ def handler(event: dict, context) -> dict:
         if method == "GET" and path == "/faults":
             return _list_faults()
 
+        if method == "GET" and path == "/warmup":
+            data_paths = (BUILDINGS_PATH, EXPOSURE_PATH, FRAGILITY_PATH, FAULTS_PATH)
+            return _response(
+                200, warm_up(needs_httpfs=any(p.startswith("s3://") for p in data_paths))
+            )
+
         if method == "GET" and path == "/scenarios/fault":
             return _fault_scenario(query)
 
@@ -92,8 +99,7 @@ def handler(event: dict, context) -> dict:
 
 def _list_faults() -> dict:
     """Mirrors local.py's GET /faults -- every fault, no location args."""
-    faults = load_faults(FAULTS_PATH)
-    return _response(200, {"faults": faults.to_dict(orient="records")})
+    return _response(200, faults_payload(FAULTS_PATH))
 
 
 def _building_info(building_id: str) -> dict:
@@ -253,11 +259,10 @@ def _run_and_respond(
         # function. Writes the same layout local dev's results_store.py
         # writes to local disk, so the tiles Lambda (services/tiles) can
         # read a prod scenario's results the same way it reads a local one.
-        # tiles.results_store.write_buildings takes a plain list of dicts,
-        # not a DataFrame -- that module has to stay free of pandas/pyarrow
-        # to fit Lambda's 250MB zip-package limit (see its own docstring),
-        # so the Arrow table -> records conversion happens here instead,
-        # where pyarrow is already a dependency regardless.
+        # tiles.results_store.write_buildings takes plain Python columns
+        # (`to_pydict()`), not an Arrow table -- that package has to stay
+        # free of pandas/pyarrow to fit Lambda's 250MB zip-package limit
+        # (tiles.scenario_results documents the file it writes).
         from tiles.results_store import (
             init_scenario,
             write_buildings,
@@ -267,7 +272,7 @@ def _run_and_respond(
 
         init_scenario(RESULTS_BUCKET, scenario_id)
         write_municipality_stats(RESULTS_BUCKET, scenario_id, municipality_stats)
-        write_buildings(RESULTS_BUCKET, scenario_id, summary.shipped.to_pylist())
+        write_buildings(RESULTS_BUCKET, scenario_id, summary.shipped.to_pydict())
         # Last: marks this id as a complete, reusable result (the cache).
         write_response(RESULTS_BUCKET, scenario_id, payload)
 

@@ -7,23 +7,15 @@ Compute is still synchronous end to end (no background job yet -- that's
 the next step once this on-disk shape is validated locally): each `write_*`
 call below just persists a stage's output right after computing it, so the
 frontend can start polling `status.json` and consuming
-`municipality_stats.json`/`buildings.json` incrementally even though, for
+`municipality_stats.json`/the per-building results incrementally even though, for
 now, all three land in quick succession within the same request.
 
-`buildings.json.gz` (not `.parquet`, despite `write_buildings` taking a
-DataFrame): the tiles Lambda that reads this file back
-(`services/tiles/results_store.py`) has to stay under Lambda's 250MB
-zip-package size limit, and `pyarrow` alone (needed for `pd.read_parquet`)
-is ~155MB unzipped -- confirmed by a real deploy failure ("Unzipped size
-must be smaller than 262144000 bytes"). Plain (uncompressed) JSON was
-tried first, but measured ~5-7x larger than the parquet it replaced
-(3.6MB vs 762KB at 20k rows; 72.7MB vs 10.5MB at 400k) -- real S3
-storage/transfer bloat, not just a theoretical concern. Gzipping closes
-that gap almost entirely (590KB/11.8MB for the same two sizes, roughly
-parquet-sized or smaller) for a decompress+parse cost still measured in
-the tens of milliseconds even at 400k rows. `municipality_stats.json`
-stays uncompressed -- at most ~8,200 municipalities nationwide, small
-regardless of format.
+The per-building results file (`scenario_results.FILENAME`) is shared
+with the cloud: the format, and why it's column-oriented JSON rather than
+parquet, are documented in services/tiles/src/tiles/scenario_results.py
+(ADR-0023), the one module that encodes and decodes it for both.
+`municipality_stats.json` stays uncompressed -- at most ~8,200
+municipalities nationwide, small regardless of format.
 
 `scenario_id` (minted in local.py, not here) is content-addressed
 (scenario_id.py): an identical request lands on the same directory.
@@ -41,9 +33,10 @@ import gzip
 import json
 import os
 import time
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-import pandas as pd
+from tiles import scenario_results
 
 RESULTS_DIR = Path(os.environ.get("TWINER_RESULTS_DIR", "results"))
 
@@ -78,10 +71,11 @@ def write_municipality_stats(scenario_id: str, stats: list[dict]) -> None:
     _write_status(scenario_id, municipal_stats_ready=True)
 
 
-def write_buildings(scenario_id: str, buildings: pd.DataFrame) -> None:
-    path = scenario_dir(scenario_id) / "buildings.json.gz"
-    raw = json.dumps(buildings.to_dict(orient="records")).encode("utf-8")
-    path.write_bytes(gzip.compress(raw))
+def write_buildings(scenario_id: str, columns: Mapping[str, Sequence]) -> None:
+    """`columns`: the listed buildings, one sequence per
+    `scenario_results.COLUMNS` entry (e.g. a pyarrow Table's `to_pydict()`)."""
+    path = scenario_dir(scenario_id) / scenario_results.FILENAME
+    path.write_bytes(scenario_results.encode(columns))
     _write_status(scenario_id, buildings_ready=True)
 
 
@@ -114,6 +108,6 @@ def read_response(scenario_id: str) -> dict | None:
     hand out a scenario_id whose /tiles/ requests would 404."""
     d = scenario_dir(scenario_id)
     path = d / "response.json.gz"
-    if not path.exists() or not (d / "buildings.json.gz").exists():
+    if not path.exists() or not (d / scenario_results.FILENAME).exists():
         return None
     return json.loads(gzip.decompress(path.read_bytes()))
