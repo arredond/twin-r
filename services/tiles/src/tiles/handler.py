@@ -14,7 +14,12 @@ heavy the compute Lambda gets. A tile-request burst also shouldn't compete
 with scenario compute for the same Lambda's concurrency/memory budget --
 splitting them means each scales independently.
 
-Serves exactly one route: GET /tiles/{scenario_id}/{z}/{x}/{y}.mvt.
+Serves two routes, one per archive:
+- GET /tiles/{scenario_id}/{z}/{x}/{y}.mvt -- buildings.pmtiles, each
+  feature extended with its scenario result (`join_tile_bytes`).
+- GET /tiles/{scenario_id}/debris/{z}/{x}/{y}.mvt -- debris.pmtiles, cut
+  down to each damaged building's one matching ring
+  (`join_debris_tile_bytes`, ADR-0019).
 
 Exposure/fragility/faults parquet paths come from environment variables in
 services/scenario's Lambda -- this one only needs the data bucket (for
@@ -36,30 +41,32 @@ from pmtiles.reader import Compression, Reader
 
 from .results_store import read_building_results
 from .s3_pmtiles import s3_source
-from .tile_join import join_tile_bytes
+from .tile_join import join_debris_tile_bytes, join_tile_bytes
 
 DATA_BUCKET = os.environ["TWINER_DATA_BUCKET"]
 # Matches docs/deploy-aws-setup.md's own upload target
 # (`aws s3 cp data/exposure/buildings.pmtiles s3://<DataBucketName>/tiles/buildings.pmtiles`).
 BUILDINGS_PMTILES_KEY = os.environ.get("TWINER_BUILDINGS_PMTILES_KEY", "tiles/buildings.pmtiles")
+DEBRIS_PMTILES_KEY = os.environ.get("TWINER_DEBRIS_PMTILES_KEY", "tiles/debris.pmtiles")
 RESULTS_BUCKET = os.environ["TWINER_RESULTS_BUCKET"]
 
-_ROUTE_RE = re.compile(r"^/tiles/(?P<scenario_id>[^/]+)/(?P<z>\d+)/(?P<x>\d+)/(?P<y>\d+)\.mvt$")
+_ROUTE_RE = re.compile(
+    r"^/tiles/(?P<scenario_id>[^/]+)/(?:(?P<layer>debris)/)?(?P<z>\d+)/(?P<x>\d+)/(?P<y>\d+)\.mvt$"
+)
 
 # Module-level, persisted across warm invocations of the same execution
 # environment (same pattern as services/scenario/db.py's DuckDB
 # connection) -- avoids re-reading the PMTiles header/root directory on
 # every request from a warm container, same rationale as local dev's
 # tile_join.py's own `_pmtiles_reader` cache, just without the lru_cache
-# wrapper since there's only ever this one archive to read here.
-_READER: Reader | None = None
+# wrapper since there are only ever these two archives to read here.
+_READERS: dict[str, Reader] = {}
 
 
-def _reader() -> Reader:
-    global _READER
-    if _READER is None:
-        _READER = Reader(s3_source(DATA_BUCKET, BUILDINGS_PMTILES_KEY))
-    return _READER
+def _reader(key: str) -> Reader:
+    if key not in _READERS:
+        _READERS[key] = Reader(s3_source(DATA_BUCKET, key))
+    return _READERS[key]
 
 
 def handler(event: dict, context) -> dict:
@@ -78,7 +85,8 @@ def handler(event: dict, context) -> dict:
     scenario_id = match["scenario_id"]
     z, x, y = int(match["z"]), int(match["x"]), int(match["y"])
 
-    reader = _reader()
+    is_debris = match["layer"] == "debris"
+    reader = _reader(DEBRIS_PMTILES_KEY if is_debris else BUILDINGS_PMTILES_KEY)
     raw = reader.get(z, x, y)
     if raw is None:
         # No base-tile data at this z/x/y (e.g. open ocean) -- a 204, not a
@@ -95,7 +103,7 @@ def handler(event: dict, context) -> dict:
     except FileNotFoundError as e:
         return _response(404, {"error": str(e)})
 
-    tile = join_tile_bytes(raw, results)
+    tile = (join_debris_tile_bytes if is_debris else join_tile_bytes)(raw, results)
     return _binary_response(200, tile, "application/vnd.mapbox-vector-tile")
 
 

@@ -89,7 +89,9 @@ Nothing needs deleting.
 `TWINER_SCENARIO_CACHE` is truthy:
 
 - Lambda (`handler._cached_response`): `HEAD scenarios/<id>.json` in the
-  results bucket, then a fresh presigned URL on a hit. This check runs
+  results bucket, then a fresh presigned URL on a hit. (ADR-0019 since
+  moved the entry to `<id>/response.json` and returns it inline -- no
+  presigned URL.) This check runs
   before the rupture is built, so a hit never imports
   engine/hazardlib. The key is written last, after the tile-join results,
   so if it exists the tiles Lambda can serve that id too.
@@ -129,7 +131,8 @@ cloud, set the Lambda's env var to `0`.
 - Measured locally for ES626 (1.67M evaluated, 19,878 shipped): 2.09s to
   compute, 0.16s for the cache hit (wall time through the FastAPI app).
   Deployed, the saving is the whole 12-33s compute. A hit still costs a
-  Lambda invocation (cold start included), a HEAD and a presign.
+  Lambda invocation (cold start included), a HEAD and a presign (a GET
+  since ADR-0019).
 - **Existing nondeterminism, surfaced by the check above, not fixed
   here**: `compute_intensity_gridded` takes each 1 km cell's Vs30 from
   its *first* row (`first_index`), and DuckDB doesn't guarantee row order.
@@ -159,7 +162,9 @@ more per pan/zoom, each one a tiles-Lambda invocation. Assessed per route:
 | `POST /scenarios/manual` | No. CloudFront never caches POST | n/a; the Lambda-level cache covers it |
 | Results payload (`scenarios/<id>.json`) | Only if served via CloudFront, not presigned S3 URLs | None (content-addressed) |
 
-**Blocker for caching `/scenarios/fault`**: the deployed response is
+**Blocker for caching `/scenarios/fault`** (resolved by ADR-0019: the
+response is now small and returned inline, so step 2 below is moot and
+debris tiles join `/tiles/*` in row 1): the deployed response was
 `{result_url: <presigned URL, 5-minute expiry>}`. A CloudFront copy that
 lives longer than 5 minutes would hand out dead URLs. Serve the results
 bucket through the same distribution (Origin Access Control, a

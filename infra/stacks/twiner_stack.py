@@ -98,20 +98,10 @@ class TwinerStack(Stack):
             auto_delete_objects=True,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             lifecycle_rules=[s3.LifecycleRule(expiration=Duration.days(30))],
-            # The bucket itself stays private (no public-read policy, unlike
-            # the data bucket) -- handler.py hands the frontend a presigned
-            # GET URL per result instead. The browser still evaluates CORS
-            # against the *bucket's* config when it fetches that URL, so
-            # this is needed even though the URL itself carries its own
-            # auth.
-            cors=[
-                s3.CorsRule(
-                    allowed_methods=[s3.HttpMethods.GET],
-                    allowed_origins=FRONTEND_ORIGINS,
-                    allowed_headers=["*"],
-                    max_age=3000,
-                )
-            ],
+            # Private and backend-only: written by scenario_fn, read by
+            # scenario_fn (the scenario cache) and tiles_fn (the tile
+            # joins). The browser never reads it -- no public policy, no
+            # CORS, no presigned URLs (ADR-0019).
         )
 
         scenario_fn = lambda_.DockerImageFunction(
@@ -210,10 +200,8 @@ class TwinerStack(Stack):
             },
         )
         data_bucket.grant_read(scenario_fn)
-        # read, not just write: generate_presigned_url signs as this
-        # Lambda's own role, and S3 checks that role's actual permissions
-        # (GetObject) when the resulting URL is later fetched by the
-        # browser -- write-only would sign a URL that 403s on use.
+        # read, not just write: a scenario cache hit reads the stored
+        # response back (ADR-0018).
         results_bucket.grant_read_write(scenario_fn)
 
         # Deliberately a separate, lightweight (zip-packaged, not
@@ -250,6 +238,9 @@ class TwinerStack(Stack):
             memory_size=512,
             timeout=Duration.seconds(10),
             environment={
+                # buildings.pmtiles and debris.pmtiles are read from their
+                # default keys (tiles/*.pmtiles, services/tiles/handler.py),
+                # the same ones docs/deploy-aws-setup.md uploads to.
                 "TWINER_DATA_BUCKET": data_bucket.bucket_name,
                 "TWINER_RESULTS_BUCKET": results_bucket.bucket_name,
             },

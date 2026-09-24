@@ -127,6 +127,15 @@ def compute_municipality_stats(result: pd.DataFrame) -> list[dict]:
     return stats
 
 
+def count_damaged(result: pd.DataFrame) -> int:
+    """Buildings whose predicted damage state isn't "None", over the *full*
+    evaluated result (before `prepare_response_buildings` trims it) -- the
+    same "affected" definition the municipality stats use (n_evaluated
+    minus the None count), so the sidebar total and the choropleth can't
+    disagree."""
+    return int((result["damage_state"] != "None").sum()) if len(result) else 0
+
+
 def evaluated_region(rupture: Rupture, radius_km: float) -> dict:
     """The circle the frontend colors green-by-default within (any
     building not individually listed in `buildings`), centered on the

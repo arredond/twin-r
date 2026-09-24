@@ -1,5 +1,10 @@
 # The scenario result API: current shape, limitations, potential improvements
 
+> **Historical.** This survey predates ADR-0017 (tile-joined buildings),
+> ADR-0018 (cache) and ADR-0019 (thin response, tile-joined debris, no
+> per-building list or presigned URL). The response described below no
+> longer exists in this form; kept for the reasoning behind those ADRs.
+
 Working notes from investigating a reported FE lag ("the app starts to lag
 when simulating low probability scenarios and zooming into cities") --
 recorded here because the answer turned out to be about the API's response

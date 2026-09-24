@@ -1,7 +1,7 @@
 """S3-backed scenario results store -- the cloud counterpart of
 services/scenario/results_store.py's local-disk version. Same key layout
-(status.json, municipality_stats.json, buildings.json under
-`<scenario_id>/` in the results bucket) so services/scenario/handler.py
+(status.json, municipality_stats.json, buildings.json.gz, response.json
+under `<scenario_id>/` in the results bucket) so services/scenario/handler.py
 (writes, after computing a scenario) and this package's own handler.py
 (reads, per tile request) agree on where a scenario's results live without
 either one hardcoding the other's paths.
@@ -90,6 +90,30 @@ def write_buildings(bucket: str, scenario_id: str, buildings: list[dict]) -> Non
         ContentEncoding="gzip",
     )
     _write_status(bucket, scenario_id, buildings_ready=True)
+
+
+def write_response(bucket: str, scenario_id: str, payload: dict) -> None:
+    """The scenario's full API response, stored as the scenario cache's
+    entry (services/scenario/scenario_id.py). Write it last: its presence
+    is what marks `<scenario_id>/` as a complete, reusable result. Never
+    read by the browser -- the scenario Lambda returns it inline, on a
+    cache hit via `read_response`."""
+    _client().put_object(
+        Bucket=bucket,
+        Key=_key(scenario_id, "response.json"),
+        Body=json.dumps(payload).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def read_response(bucket: str, scenario_id: str) -> dict | None:
+    """The stored response for this id, or None if there isn't one."""
+    s3 = _client()
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=_key(scenario_id, "response.json"))
+    except s3.exceptions.NoSuchKey:
+        return None
+    return json.loads(obj["Body"].read())
 
 
 @lru_cache(maxsize=64)

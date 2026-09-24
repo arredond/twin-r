@@ -9,7 +9,9 @@ at this layer would have caught the first outright.
 
 from __future__ import annotations
 
+import gzip
 import importlib
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -222,6 +224,29 @@ def _shutdown_tile_pool() -> None:
     local._TILE_POOL.shutdown(wait=True, cancel_futures=True)
 
 
+def _joined_buildings(body: dict) -> list[dict]:
+    """The per-building results a scenario stored for the tile joins
+    (buildings + debris, ADR-0019) -- no longer part of the API response,
+    but still exactly the "damaged or genuinely uncertain" set these tests
+    pin down."""
+    from scenario import results_store
+
+    path = results_store.scenario_dir(body["scenario_id"]) / "buildings.json.gz"
+    return json.loads(gzip.decompress(path.read_bytes()))
+
+
+def test_scenario_response_carries_no_per_building_list(client):
+    body = client.post(
+        "/scenarios/manual", json={"lat": NEAR_LAT, "lon": NEAR_LON, "mag": 6.5, "rake": 20.0}
+    ).json()
+    assert "buildings" not in body
+    # n_damaged counts non-None buildings over the full evaluated set --
+    # the same definition as the municipality stats.
+    assert body["n_damaged"] == sum(
+        s["n_evaluated"] - s["counts"]["None"] for s in body["municipality_stats"]
+    )
+
+
 def test_health(client):
     resp = client.get("/health")
     assert resp.status_code == 200
@@ -264,7 +289,7 @@ def test_manual_scenario_omits_confidently_undamaged_buildings(client):
     )
     body = resp.json()
     assert body["n_evaluated"] >= 1
-    assert body["buildings"] == []
+    assert _joined_buildings(body) == []
     assert body["evaluated_region"] == {
         "lat": NEAR_LAT,
         "lon": NEAR_LON,
@@ -283,12 +308,12 @@ def test_manual_scenario_keeps_a_genuine_close_call_even_when_modal_state_is_non
         "/scenarios/manual", json={"lat": NEAR_LAT, "lon": NEAR_LON, "mag": 5.85, "rake": 0.0}
     )
     body = resp.json()
-    assert len(body["buildings"]) >= 1
-    for b in body["buildings"]:
+    assert len(_joined_buildings(body)) >= 1
+    for b in _joined_buildings(body):
         assert "building_id" in b and "damage_state_code" in b
     # damage_state_code 0 == "None" (services/scenario/response.py's
     # DAMAGE_STATE_CODES, matching damage.py's DAMAGE_STATES ordering).
-    assert any(b["damage_state_code"] == 0 for b in body["buildings"])
+    assert any(b["damage_state_code"] == 0 for b in _joined_buildings(body))
 
 
 def test_manual_scenario_omits_none_modal_buildings_that_are_not_a_close_call(client):
@@ -303,7 +328,7 @@ def test_manual_scenario_omits_none_modal_buildings_that_are_not_a_close_call(cl
     )
     body = resp.json()
     assert body["n_evaluated"] >= 1
-    assert body["buildings"] == []
+    assert _joined_buildings(body) == []
 
 
 def test_manual_scenario_defaults_to_high_probability_level(client):
@@ -365,8 +390,8 @@ def test_low_probability_level_shows_more_damage_than_high_at_the_same_magnitude
             "probability_level": "low",
         },
     ).json()
-    assert high["buildings"] == []
-    assert len(low["buildings"]) > 0
+    assert _joined_buildings(high) == []
+    assert len(_joined_buildings(low)) > 0
 
 
 def test_fault_scenario_accepts_probability_level(client):
@@ -488,7 +513,7 @@ def test_cache_enabled_serves_an_identical_repeat_from_the_stored_result(cached_
     second = cached_client.get("/scenarios/fault", params={"fault_id": "TEST001"}).json()
     assert first["cached"] is False
     assert second["cached"] is True
-    for key in ["scenario_id", "rupture", "evaluated_region", "buildings", "municipality_stats"]:
+    for key in ["scenario_id", "rupture", "evaluated_region", "n_damaged", "municipality_stats"]:
         assert second[key] == first[key]
     # Still a valid tile-join target after a hit.
     status = cached_client.get(f"/results/{second['scenario_id']}/status").json()
@@ -555,7 +580,7 @@ def test_municipality_stats_agree_with_which_buildings_are_shipped_individually(
     assert resp.status_code == 200
     body = resp.json()
 
-    shipped_ids = {b["building_id"] for b in body["buildings"]}
+    shipped_ids = {b["building_id"] for b in _joined_buildings(body)}
     stats_by_code = {s["municipality_code"]: s for s in body["municipality_stats"]}
     assert stats_by_code, "expected at least one municipality's stats"
 
@@ -568,7 +593,7 @@ def test_municipality_stats_agree_with_which_buildings_are_shipped_individually(
     assert n_affected > 0
     n_affected_and_shipped = sum(
         1
-        for b in body["buildings"]
+        for b in _joined_buildings(body)
         if b["building_id"] in {"b1", "b2"} and b["damage_state_code"] != 0
     )
     assert n_affected_and_shipped == n_affected

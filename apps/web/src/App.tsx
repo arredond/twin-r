@@ -182,7 +182,7 @@ export default function App() {
         {result && (
           <p style={{ fontSize: "0.85rem" }}>
             {result.n_evaluated.toLocaleString()} buildings evaluated,{" "}
-            {result.buildings.length.toLocaleString()} damaged, for Mw{" "}
+            {result.n_damaged.toLocaleString()} damaged, for Mw{" "}
             {result.rupture.mag.toFixed(2)}
             {result.rupture.finite_rupture && " (finite rupture plane)"}
             {result.cached && " — cached"}
@@ -210,7 +210,6 @@ export default function App() {
       </aside>
       <main style={{ flex: 1 }}>
         <DamageMap
-          results={result?.buildings ?? null}
           scenarioId={result?.scenario_id ?? null}
           municipalityStats={result?.municipality_stats ?? []}
           evaluatedRegion={result?.evaluated_region ?? null}

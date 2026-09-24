@@ -110,7 +110,9 @@ translate directly to.
   coupling this ADR's Decision explains. Rejected -- the user explicitly
   asked to evaluate this trade-off given cold-start concerns, and chose
   the split.
-- **Debris tile-joining, done the same way now**: deferred. Debris
+- **Debris tile-joining, done the same way now**: deferred at the time
+  (since done -- ADR-0019, once the client-side list it relied on proved
+  too large to ship). Debris
   doesn't currently need aggregate stats or a results-driven join --
   building IDs + damage state are enough for the frontend to pick the
   right precomputed ring client-side. Revisit if/when debris aggregate
@@ -135,7 +137,9 @@ translate directly to.
   no longer a *direct* dependency of `services/scenario` -- only
   `services/tiles` imports it now (for its bundled protobuf schema, not
   `encode()`/`decode()` themselves, per the join-logic rationale above).
-- Scenario compute's presigned-URL escape hatch (`_write_large_payload_to_s3`)
+- (Superseded by ADR-0019, which removed the presigned-URL path and the
+  per-building list from the response entirely.) Scenario compute's
+  presigned-URL escape hatch (`_write_large_payload_to_s3`)
   and the tile-join results (`results_store.py`'s three files) are now two
   separate S3 writes per large scenario, under the same `scenario_id` --
   slightly more S3 traffic per compute request, not expected to matter at

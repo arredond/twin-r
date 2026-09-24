@@ -182,11 +182,10 @@ curl -s "<ScenarioFunctionUrl>scenarios/fault?fault_id=<some fault_id>" | gunzip
 ```
 
 (the response is gzip-compressed, see `handler.py`'s `_response`). Expect
-a JSON payload with `buildings`/`municipality_stats`, not a 500 — a 500
-here almost always means a missing/mistyped S3 key from step 8, or a
-still-propagating IAM permission. (Deployed, that payload arrives as
-`{"result_url": ..., "cached": ...}` -- fetch `result_url` for the body.
-Run the same curl twice: the second should come back `"cached": true`,
+a small JSON payload with `scenario_id`/`n_damaged`/`municipality_stats`
+(no per-building list -- ADR-0019), not a 500 — a 500 here almost always
+means a missing/mistyped S3 key from step 8, or a still-propagating IAM
+permission. Run the same curl twice: the second should come back `"cached": true`,
 the scenario result cache from ADR-0018.)
 
 **After uploading new data** (any of step 8's parquet files), bump

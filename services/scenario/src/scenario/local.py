@@ -25,7 +25,12 @@ from .engine import run_scenario
 from .faults import get_fault, load_faults, round_near_point, rupture_anchor
 from .ground_motion import estimate_significant_distance_km
 from .probability_level import ProbabilityLevel, resolve_probability_level
-from .response import compute_municipality_stats, evaluated_region, prepare_response_buildings
+from .response import (
+    compute_municipality_stats,
+    count_damaged,
+    evaluated_region,
+    prepare_response_buildings,
+)
 from .results_store import (
     init_scenario,
     read_municipality_stats,
@@ -89,6 +94,11 @@ FAULTS_PATH = os.environ.get("TWINER_FAULTS_PATH", f"{DATA_DIR}/faults/qafi_faul
 # tiles from it and joins in a scenario's results, never re-tiling.
 BUILDINGS_PMTILES_PATH = os.environ.get(
     "TWINER_BUILDINGS_PMTILES_PATH", f"{DATA_DIR}/exposure/buildings.pmtiles"
+)
+# Same for debris.pmtiles (ADR-0010 rings) -- joined the same way, one tile
+# at a time, by the /tiles/{scenario_id}/debris/... route below.
+DEBRIS_PMTILES_PATH = os.environ.get(
+    "TWINER_DEBRIS_PMTILES_PATH", f"{DATA_DIR}/exposure/debris.pmtiles"
 )
 
 
@@ -165,6 +175,7 @@ def _run_and_serialize(rupture: Rupture, probability_level: str, scenario_id: st
             damage_percentile=level_params.damage_percentile,
         )
         n_evaluated = len(result)
+        n_damaged = count_damaged(result)
         # Aggregated from the *full* result (before it's trimmed below) --
         # see compute_municipality_stats's own docstring for why this needs
         # lon/lat, which the thin payload deliberately drops.
@@ -174,6 +185,8 @@ def _run_and_serialize(rupture: Rupture, probability_level: str, scenario_id: st
         # frontend-facing payload (see response.py's docstring for why
         # lon/lat/im_value/im_type are dropped and damage_state becomes an
         # int code).
+        # Written for the tile joins (buildings + debris, ADR-0019), not
+        # returned -- the frontend never needs the per-building list.
         result = prepare_response_buildings(result)
         write_buildings(scenario_id, result)
         # Fire-and-forget: pays each pool worker's cold-cache cost for this
@@ -216,8 +229,8 @@ def _run_and_serialize(rupture: Rupture, probability_level: str, scenario_id: st
         # See response.evaluated_region's docstring (centered on the
         # rupture's own point, widened to cover a finite surface's extent).
         "evaluated_region": evaluated_region(rupture, radius_km),
-        "buildings": result.to_dict(orient="records"),
         "n_evaluated": n_evaluated,
+        "n_damaged": n_damaged,
         "municipality_stats": municipality_stats,
     }
     # Stored (without the per-request fields added below) whether or not
@@ -361,22 +374,35 @@ async def scenario_tile(scenario_id: str, z: int, x: int, y: int) -> Response:
     instead of fetching every affected building_id and setFeatureState-ing
     them in one by one (see tile_join.py's docstring for the full design
     rationale, including why this reads one tile at a time rather than
-    building a per-scenario buildings.pmtiles).
+    building a per-scenario buildings.pmtiles)."""
+    return await _joined_tile(BUILDINGS_PMTILES_PATH, scenario_id, z, x, y, debris=False)
 
-    Dispatched to `_TILE_POOL` (see its own comment) rather than called
+
+@app.get("/tiles/{scenario_id}/debris/{z}/{x}/{y}.mvt")
+async def scenario_debris_tile(scenario_id: str, z: int, x: int, y: int) -> Response:
+    """A debris.pmtiles tile cut down to this scenario's damaged buildings'
+    matching rings (ADR-0019) -- the debris counterpart of `scenario_tile`,
+    so the frontend never needs the per-building result list itself."""
+    return await _joined_tile(DEBRIS_PMTILES_PATH, scenario_id, z, x, y, debris=True)
+
+
+async def _joined_tile(
+    pmtiles_path: str, scenario_id: str, z: int, x: int, y: int, debris: bool
+) -> Response:
+    """Dispatched to `_TILE_POOL` (see its own comment) rather than called
     directly -- join_tile is CPU-bound, and running it in-process would
     serialize concurrent tile requests behind the GIL."""
     loop = asyncio.get_running_loop()
     try:
         tile = await loop.run_in_executor(
-            _TILE_POOL, join_tile, BUILDINGS_PMTILES_PATH, scenario_id, z, x, y
+            _TILE_POOL, join_tile, pmtiles_path, scenario_id, z, x, y, debris
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     if tile is None:
         # No base-tile data at this z/x/y (e.g. open ocean) -- a 204, not a
         # 404: the scenario_id is valid, this tile is just legitimately
-        # empty, same as buildings.pmtiles itself would return.
+        # empty, same as the static archive itself would return.
         return Response(status_code=204)
     return Response(content=tile, media_type="application/vnd.mapbox-vector-tile")
 

@@ -31,7 +31,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from pmtiles.reader import Compression, MmapSource, Reader
-from tiles.tile_join import join_tile_bytes
+from tiles.tile_join import join_debris_tile_bytes, join_tile_bytes
 
 from .results_store import scenario_dir
 
@@ -99,10 +99,15 @@ def warm_cache(pmtiles_path: str | Path, scenario_id: str) -> None:
     _building_results(scenario_id)
 
 
-def join_tile(pmtiles_path: str | Path, scenario_id: str, z: int, x: int, y: int) -> bytes | None:
+def join_tile(
+    pmtiles_path: str | Path, scenario_id: str, z: int, x: int, y: int, debris: bool = False
+) -> bytes | None:
     """Returns a raw (uncompressed) MVT tile with each `buildings` feature's
     properties extended by the scenario's result for that `building_id`
     (when present), or None if the base tile has no data at (z, x, y).
+    With `debris`, `pmtiles_path` is debris.pmtiles and the tile is cut
+    down to each damaged building's one matching ring instead
+    (`tiles.tile_join.join_debris_tile_bytes`).
     Left uncompressed -- the FastAPI app's own GZipMiddleware (local.py)
     handles response compression, same as every other route here."""
     reader = _pmtiles_reader(str(pmtiles_path))
@@ -119,4 +124,4 @@ def join_tile(pmtiles_path: str | Path, scenario_id: str, z: int, x: int, y: int
         raw = gzip.decompress(raw)
 
     results = _building_results(scenario_id)
-    return join_tile_bytes(raw, results)
+    return (join_debris_tile_bytes if debris else join_tile_bytes)(raw, results)

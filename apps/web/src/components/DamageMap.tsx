@@ -55,7 +55,9 @@ function pmtilesUrl(filename: string): string {
 // building_id list and setFeatureState it in one-by-one (the previous
 // design, which didn't scale past ~100k affected buildings). Before any
 // scenario has run, the map falls back to the plain static PMTiles archive
-// with no join.
+// with no join. Debris rings get the same treatment (ADR-0019): a joined
+// debris tile carries only each damaged building's one matching ring.
+// The scenario response itself carries no per-building data at all.
 const BUILDINGS_PMTILES_URL = pmtilesUrl("buildings.pmtiles");
 
 const BUILDINGS_SOURCE_ID = "buildings";
@@ -190,10 +192,6 @@ const SPAIN_CENTER: [number, number] = [-3.7038, 40.0];
 const SPAIN_ZOOM = 5.3;
 
 interface Props {
-  // Damaged, or "None"-modal-but-uncertain, buildings only -- the
-  // confidently-undamaged majority isn't sent at all (see scenarioApi.ts);
-  // `evaluatedRegion` is how those get colored anyway.
-  results: BuildingDamageResult[] | null;
   // Keys the per-scenario tile-join endpoint (GET
   // /tiles/{scenario_id}/{z}/{x}/{y}.mvt, services/scenario/tile_join.py).
   // null before any scenario has run (or for the deployed-Lambda path,
@@ -203,8 +201,7 @@ interface Props {
   // Server-computed aggregate stats per municipality (services/scenario's
   // compute_municipality_stats) -- drives the low-zoom choropleth. Always
   // `[]` (never absent) when a scenario has run but the backend had no
-  // municipalities dataset available, same "additive, not required" shape
-  // as `results` being empty.
+  // municipalities dataset available -- additive, not required.
   municipalityStats: MunicipalityStats[];
   evaluatedRegion: EvaluatedRegion | null;
   faults: Fault[] | null;
@@ -253,39 +250,6 @@ function escapeHtml(value: unknown): string {
   return String(value ?? "—").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string
   );
-}
-
-// A national very-low-probability scenario can return 100k+ buildings
-// (elevated ground motion + the 85th-percentile damage threshold both
-// widen how many buildings are a genuine close call, see
-// docs/validation-region-expansion.md) -- applying setFeatureState to all
-// of them one at a time in a single synchronous loop is enough work to
-// visibly freeze the tab for several seconds. Spreading the same calls
-// across idle/animation-frame chunks keeps the map interactive while the
-// coloring catches up progressively instead of all at once; `isStale`
-// lets a still-running chunk of an older result abandon itself once a
-// newer one has started (e.g. the user ran a second scenario before the
-// first finished applying).
-const FEATURE_STATE_CHUNK_SIZE = 5000;
-
-function scheduleChunked<T>(
-  items: T[],
-  apply: (item: T) => void,
-  isStale: () => boolean,
-  onDone?: () => void,
-  chunkSize = FEATURE_STATE_CHUNK_SIZE
-): void {
-  let i = 0;
-  const schedule =
-    typeof requestIdleCallback === "function" ? requestIdleCallback : requestAnimationFrame;
-  const step = () => {
-    if (isStale()) return;
-    const end = Math.min(i + chunkSize, items.length);
-    for (; i < end; i++) apply(items[i]);
-    if (i < items.length) schedule(step);
-    else onDone?.();
-  };
-  step();
 }
 
 const EARTH_RADIUS_KM = 6371;
@@ -371,7 +335,8 @@ function renderProbabilityBar(damage: BuildingDamageResult): string {
 // request needed), while taxonomy_class/height_class only live in
 // exposure.parquet and need the /buildings/{id} lookup (buildingInfo,
 // still loading -> null while the request is in flight). Damage state
-// comes from the current scenario `results`, if this building is in it.
+// comes off the clicked feature itself, joined in by the tile endpoint when
+// this scenario listed the building (tileDamageResult).
 function renderBuildingPopupHtml(
   tileProps: Record<string, unknown>,
   damage: BuildingDamageResult | null,
@@ -489,14 +454,18 @@ function renderMunicipalityPopupHtml(
 // per-scenario tile-join endpoint (scenarioId given -- tile_join.py joins
 // this scenario's results into each tile's `buildings` features on the
 // fly) or the plain static archive (scenarioId null -- before any scenario
-// has run, or for the deployed-Lambda path, which doesn't populate
+// has run, or for a deployed backend without a results bucket, which doesn't populate
 // results_store.py/expose this endpoint yet). Called both on initial map
 // load and, again, whenever the source-swap effect below sees scenarioId
 // actually change -- a vector source's tiles/url can't be swapped in place
 // between a PMTiles archive and an XYZ tile endpoint, so this always
 // removes+re-adds both the source and its layers rather than mutating one
 // in place.
-function addBuildingsSourceAndLayers(map: MapLibreMap, scenarioId: string | null): void {
+function addBuildingsSourceAndLayers(
+  map: MapLibreMap,
+  scenarioId: string | null,
+  beforeId?: string
+): void {
   map.addSource(BUILDINGS_SOURCE_ID, {
     type: "vector",
     ...(scenarioId
@@ -553,7 +522,7 @@ function addBuildingsSourceAndLayers(map: MapLibreMap, scenarioId: string | null
       "fill-opacity": 0.85,
       "fill-outline-color": "#00000033",
     },
-  });
+  }, beforeId);
   map.addLayer({
     id: BUILDINGS_OUTLINE_LAYER_ID,
     type: "line",
@@ -561,7 +530,64 @@ function addBuildingsSourceAndLayers(map: MapLibreMap, scenarioId: string | null
     "source-layer": "buildings",
     minzoom: BUILDING_DETAIL_MINZOOM,
     paint: { "line-color": SELECTED_OUTLINE_PAINT, "line-width": 2.5 },
+  }, beforeId);
+}
+
+// Debris envelopes (ADR-0010), same source-swap pattern as the buildings
+// above: the plain static archive before any scenario has run, this
+// scenario's debris tile-join endpoint after (ADR-0019). The joined tiles
+// keep only each damaged building's one ring matching its
+// damage_state_code, tagged with that code; the filter below shows exactly
+// those, and hides every ring of the unjoined static archive (no
+// damage_state_code property at all).
+function addDebrisSourceAndLayers(
+  map: MapLibreMap,
+  scenarioId: string | null,
+  beforeId?: string
+): void {
+  map.addSource(DEBRIS_SOURCE_ID, {
+    type: "vector",
+    ...(scenarioId
+      ? {
+          tiles: [`${TILES_API_URL}/tiles/${scenarioId}/debris/{z}/{x}/{y}.mvt`],
+          // Same reason as the buildings tile-join source: a plain `tiles`
+          // source has no header to read a maxzoom from. debris.pmtiles'
+          // own header says 15.
+          maxzoom: 15,
+        }
+      : { url: `pmtiles://${DEBRIS_PMTILES_URL}` }),
   });
+  map.addLayer(
+    {
+      id: DEBRIS_LAYER_ID,
+      type: "fill",
+      source: DEBRIS_SOURCE_ID,
+      "source-layer": "debris",
+      minzoom: BUILDING_DETAIL_MINZOOM,
+      // Only the ring matching a building's predicted damage state
+      // (ring 1 = Slight .. ring 4 = Complete). Each ring is the
+      // *cumulative* envelope out to its distance (debris.py), so that one
+      // ring already covers what stacking rings 1..N would. A filter, not
+      // a zero opacity, so hidden rings aren't hit-testable either.
+      filter: ["==", ["get", "ring"], ["get", "damage_state_code"]],
+      paint: { "fill-color": DEBRIS_COLOR, "fill-opacity": DEBRIS_RING_OPACITY },
+    },
+    beforeId
+  );
+  map.addLayer(
+    {
+      id: DEBRIS_OUTLINE_LAYER_ID,
+      type: "line",
+      source: DEBRIS_SOURCE_ID,
+      "source-layer": "debris",
+      minzoom: BUILDING_DETAIL_MINZOOM,
+      // Selection highlight, filter-based on (building_id, ring) -- see
+      // selectDebrisRing. Starts matching nothing.
+      filter: ["==", ["get", "ring"], -1],
+      paint: { "line-color": SELECTED_OUTLINE_COLOR, "line-width": 2.5 },
+    },
+    beforeId
+  );
 }
 
 function faultsToFeatureCollection(faults: Fault[]): FeatureCollection {
@@ -578,7 +604,6 @@ function faultsToFeatureCollection(faults: Fault[]): FeatureCollection {
 }
 
 export function DamageMap({
-  results,
   scenarioId,
   municipalityStats,
   evaluatedRegion,
@@ -596,11 +621,6 @@ export function DamageMap({
   // itself instead of guessing from feel.
   const [zoom, setZoom] = useState<number | null>(null);
   const mapLoadedRef = useRef(false);
-  const loadedDebrisBuildingIdsRef = useRef<Set<string>>(new Set());
-  // Bumped once per `results` change in the debris feature-state effect
-  // below -- lets a chunked run still in progress (scheduleChunked)
-  // recognize it's been superseded by a newer one and stop applying.
-  const debrisFeatureStateRunIdRef = useRef(0);
   // Which scenario_id (or null, meaning "no join, static archive") the
   // buildings source is currently pointed at -- lets the source-swap effect
   // below skip work when scenarioId hasn't actually changed.
@@ -608,7 +628,7 @@ export function DamageMap({
   const loadedMunicipalityCodesRef = useRef<Set<string>>(new Set());
   // Municipality popup needs the latest stats (by municipality_code) to
   // show a clicked polygon's breakdown, without re-binding the click
-  // handler -- same pattern as resultsByIdRef below.
+  // handler -- same pattern as evaluatedRegionRef below.
   const municipalityStatsRef = useRef(municipalityStats);
   municipalityStatsRef.current = municipalityStats;
   // Click-to-highlight (buildings and debris share one selection -- a
@@ -627,20 +647,6 @@ export function DamageMap({
   onMapClickRef.current = onMapClick;
   const onMapMoveRef = useRef(onMapMove);
   onMapMoveRef.current = onMapMove;
-  // Debris click popup still needs a client-side building_id -> result
-  // lookup (buildings' own popup doesn't -- see tileDamageResult -- but
-  // debris.pmtiles isn't tile-joined, see this file's top-of-file
-  // docstring on why that's deferred). Indexed by building_id (a national
-  // very-low-probability scenario can return 100k+ buildings, see
-  // docs/decisions -- a plain array .find() per click would be an O(n)
-  // scan over all of them).
-  const resultsById = useMemo(() => {
-    const byId = new Map<string, BuildingDamageResult>();
-    for (const b of results ?? []) byId.set(b.building_id, b);
-    return byId;
-  }, [results]);
-  const resultsByIdRef = useRef(resultsById);
-  resultsByIdRef.current = resultsById;
   // Building-click popup needs the region a scenario was evaluated against
   // to classify a clicked building that has no joined damage_state_code
   // (see isWithinEvaluatedRegion) -- damage itself now comes straight off
@@ -722,64 +728,7 @@ export function DamageMap({
       addBuildingsSourceAndLayers(map, null);
       buildingsSourceScenarioIdRef.current = null;
 
-      map.addSource(DEBRIS_SOURCE_ID, {
-        type: "vector",
-        url: `pmtiles://${DEBRIS_PMTILES_URL}`,
-        // Not actually unique per feature (4 ring features share one
-        // building_id) -- fine here, and deliberate: every ring feature
-        // for a building should receive the *same* feature-state
-        // (damage_state_code), so a shared promoted id is exactly what
-        // lets one setFeatureState call below drive all of a building's
-        // rings at once.
-        promoteId: "building_id",
-      });
-      map.addLayer({
-        id: DEBRIS_LAYER_ID,
-        type: "fill",
-        source: DEBRIS_SOURCE_ID,
-        "source-layer": "debris",
-        minzoom: BUILDING_DETAIL_MINZOOM,
-        paint: {
-          "fill-color": DEBRIS_COLOR,
-          // Only the ring matching a building's *current* predicted damage
-          // state renders (ring 1 = Slight .. ring 4 = Complete, ADR-0010).
-          // Each ring's geometry is now the *cumulative* envelope out to
-          // that ring's distance (debris.py: "ring N always fully contains
-          // ring N-1"), not an annulus between two distances -- so the
-          // single ring matching the damage state already covers the same
-          // area stacking rings 1..N used to. Rendering every ring
-          // <= damage_state_code (an earlier version of this expression)
-          // would now just repaint the same pixels 1-4 times over.
-          // ["feature-state", "damage_state_code"] is unset (null) for any
-          // building no scenario has touched yet, so `coalesce` to -1
-          // keeps every ring hidden by default rather than comparing
-          // against null.
-          "fill-opacity": [
-            "case",
-            ["==", ["get", "ring"], ["coalesce", ["feature-state", "damage_state_code"], -1]],
-            DEBRIS_RING_OPACITY,
-            0,
-          ],
-        },
-      });
-      map.addLayer({
-        id: DEBRIS_OUTLINE_LAYER_ID,
-        type: "line",
-        source: DEBRIS_SOURCE_ID,
-        "source-layer": "debris",
-        minzoom: BUILDING_DETAIL_MINZOOM,
-        // Filter-based, not feature-state-based like BUILDINGS_OUTLINE_LAYER_ID
-        // -- debris' `promoteId` is building_id, deliberately shared by all
-        // 4 of a building's ring features (so one setFeatureState drives
-        // all their damage_state_code-gated visibility at once, see the
-        // source comment above). That same sharing means a feature-state
-        // "selected" flag can't identify a single ring -- it would light up
-        // every ring of the clicked building's debris. A filter on
-        // (building_id, ring) together can, since filters read plain tile
-        // properties, not the shared promoted id.
-        filter: ["==", ["get", "ring"], -1],
-        paint: { "line-color": SELECTED_OUTLINE_COLOR, "line-width": 2.5 },
-      });
+      addDebrisSourceAndLayers(map, null);
 
       map.addSource(FAULTS_SOURCE_ID, {
         type: "geojson",
@@ -852,7 +801,7 @@ export function DamageMap({
       // Building click popup: floors/construction year/use/cadastral id
       // come straight off the clicked tile feature (no request needed);
       // taxonomy/height class need a /buildings/{id} lookup, and damage
-      // comes from whatever scenario has already been run (resultsByIdRef).
+      // comes off the clicked (tile-joined) feature itself (tileDamageResult).
       // Registered before the generic "click anywhere" handler below so a
       // building click never also falls through to onMapClick (that
       // handler checks queryRenderedFeatures itself and skips when this
@@ -912,15 +861,10 @@ export function DamageMap({
         const ring = Number(tileProps.ring);
         if (!buildingId || !Number.isFinite(ring)) return;
 
-        // Every ring feature is still hit-testable regardless of paint
-        // opacity (fill-opacity 0 still hit-tests, unlike a filtered-out
-        // feature -- see the municipality filter's own comment on this) --
-        // a click on any ring below the building's actual predicted damage
-        // state would otherwise select/pop up a ring that isn't actually
-        // shown. Only the ring matching the current damage state (the one
-        // the fill-opacity expression above actually renders) responds.
-        const damage = resultsByIdRef.current.get(buildingId);
-        if (!damage || ring !== damage.damage_state_code) return;
+        // The layer's filter already hides (and so un-hit-tests) every ring
+        // but the one matching the building's joined damage_state_code --
+        // re-checked here only as a guard against a static-archive tile.
+        if (ring !== Number(tileProps.damage_state_code)) return;
 
         selectDebrisRing(buildingId, ring);
 
@@ -1026,11 +970,12 @@ export function DamageMap({
     ]);
   }, [selectedFaultId]);
 
-  // Swap the buildings source to this scenario's tile-join endpoint once
-  // one has run (or back to the plain static archive when it hasn't --
-  // e.g. a fresh page load). Replaces the old per-building setFeatureState
-  // loop entirely: since tile_join.py now joins damage straight onto each
-  // tile server-side, there's no client-side coloring pass left to do, at
+  // Swap the buildings and debris sources to this scenario's tile-join
+  // endpoints once one has run (or back to the plain static archives when
+  // it hasn't -- e.g. a fresh page load). Replaces the old per-building
+  // setFeatureState loops entirely: damage is joined onto each tile
+  // server-side (ADR-0017 buildings, ADR-0019 debris), so there's no
+  // client-side pass left to do, and no per-building list to download, at
   // any scenario size.
   useEffect(() => {
     const map = mapRef.current;
@@ -1038,10 +983,23 @@ export function DamageMap({
     if (buildingsSourceScenarioIdRef.current === scenarioId) return;
     buildingsSourceScenarioIdRef.current = scenarioId;
 
-    if (map.getLayer(BUILDINGS_OUTLINE_LAYER_ID)) map.removeLayer(BUILDINGS_OUTLINE_LAYER_ID);
-    if (map.getLayer(BUILDINGS_LAYER_ID)) map.removeLayer(BUILDINGS_LAYER_ID);
-    if (map.getSource(BUILDINGS_SOURCE_ID)) map.removeSource(BUILDINGS_SOURCE_ID);
-    addBuildingsSourceAndLayers(map, scenarioId);
+    for (const layerId of [
+      DEBRIS_OUTLINE_LAYER_ID,
+      DEBRIS_LAYER_ID,
+      BUILDINGS_OUTLINE_LAYER_ID,
+      BUILDINGS_LAYER_ID,
+    ]) {
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
+    }
+    for (const sourceId of [DEBRIS_SOURCE_ID, BUILDINGS_SOURCE_ID]) {
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
+    }
+    // Re-inserted beneath the fault lines, same stacking as the initial
+    // load (municipalities < buildings < debris < faults) -- addLayer
+    // without a beforeId would put them on top of everything.
+    const beforeId = map.getLayer(FAULTS_LAYER_ID) ? FAULTS_LAYER_ID : undefined;
+    addBuildingsSourceAndLayers(map, scenarioId, beforeId);
+    addDebrisSourceAndLayers(map, scenarioId, beforeId);
     // A source swap drops any feature-state the removed source held --
     // the previous selection highlight (if any) no longer refers to a
     // feature that still exists, so forget it rather than leaving a
@@ -1050,55 +1008,6 @@ export function DamageMap({
 
     map.setPaintProperty(BUILDINGS_LAYER_ID, "fill-color", buildingsFillColor(evaluatedRegion));
   }, [scenarioId]);
-
-  // Debris rings (ADR-0010): same building_id-keyed feature-state pattern
-  // as the buildings layer above, on the separate debris source -- a
-  // building's damage_state_code drives which of its precomputed rings
-  // the paint expression (added above) actually shows. Kept as its own
-  // effect/source rather than reusing BUILDINGS_SOURCE_ID because the
-  // debris layer has its own geometry (rings, not footprints) and its own
-  // per-feature `ring` attribute the paint expression reads.
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    debrisFeatureStateRunIdRef.current += 1;
-    const runId = debrisFeatureStateRunIdRef.current;
-    const isStale = () => debrisFeatureStateRunIdRef.current !== runId;
-
-    const applyDebrisFeatureState = () => {
-      const target = { source: DEBRIS_SOURCE_ID, sourceLayer: "debris" };
-
-      const idsToClear = Array.from(loadedDebrisBuildingIdsRef.current);
-      loadedDebrisBuildingIdsRef.current = new Set();
-
-      scheduleChunked(
-        idsToClear,
-        (id) => map.removeFeatureState({ ...target, id }),
-        isStale,
-        () => {
-          scheduleChunked(results ?? [], (building) => {
-            map.setFeatureState(
-              { ...target, id: building.building_id },
-              { damage_state_code: building.damage_state_code }
-            );
-            loadedDebrisBuildingIdsRef.current.add(building.building_id);
-          }, isStale);
-        }
-      );
-    };
-
-    // getSource first: on mount this effect runs before the map's "load"
-    // handler has added the debris source, and isSourceLoaded on a missing
-    // source logs a "no tile manager with ID 'debris'" error event instead
-    // of just returning false -- the "sourcedata" fallback below already
-    // covers that case.
-    if (map.getSource(DEBRIS_SOURCE_ID) && map.isSourceLoaded(DEBRIS_SOURCE_ID)) {
-      applyDebrisFeatureState();
-    } else {
-      map.once("sourcedata", applyDebrisFeatureState);
-    }
-  }, [results]);
 
   // Municipality choropleth: same feature-state pattern, keyed by
   // municipality_code (== the tile's own ine_code, promoted as its id).
@@ -1117,11 +1026,11 @@ export function DamageMap({
   // alone isn't the right bar.
   useEffect(() => {
     const map = mapRef.current;
-    // Needed (unlike the buildings/debris feature-state effects above,
-    // which only ever call setFeatureState) because this effect also
+    // Needed (unlike a plain setFeatureState call, which is harmless
+    // before the layer exists) because this effect also
     // calls setFilter on MUNICIPALITIES_LAYER_ID -- that layer doesn't
     // exist until the map's "load" handler runs addLayer, so without this
-    // guard a `results`/`municipalityStats` update landing before then
+    // guard a `municipalityStats` update landing before then
     // (e.g. this effect's own first run, since mapRef.current is already
     // set synchronously in the map-creation effect above, well before its
     // async "load" event fires) subscribes to the next "sourcedata" event

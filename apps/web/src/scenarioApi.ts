@@ -50,13 +50,11 @@ export interface Fault {
   geometry_geojson: string; // GeoJSON (Multi)LineString, parse before use
 }
 
-// Thin per-building payload (services/scenario/response.py): building_id +
-// damage_state_code (index into DAMAGE_STATES, ../damageColors.ts) + the
-// five probabilities. No lon/lat/im_value/im_type -- every building here is
-// already a feature in the buildings PMTiles layer, joined by building_id
-// (DamageMap.tsx), so shipping coordinates a second time would be pure
-// waste; the intensity value/type each building was evaluated against
-// isn't rendered anywhere.
+// One building's scenario result, as the tile-join attaches it to each
+// feature of the buildings tiles (services/tiles/tile_join.py) --
+// DamageMap.tsx's tileDamageResult reads it back off a clicked feature.
+// Never downloaded as a list: the scenario response carries no
+// per-building data (ADR-0019).
 export interface BuildingDamageResult {
   building_id: string;
   damage_state_code: number;
@@ -89,6 +87,9 @@ export interface EvaluatedRegion {
 export interface MunicipalityStats {
   municipality_code: string;
   n_evaluated: number;
+  // Buildings with a predicted damage state other than None, over the
+  // whole evaluated set (same definition as municipality_stats).
+  n_damaged: number;
   counts: Record<DamageState, number>;
 }
 
@@ -114,40 +115,12 @@ export interface ScenarioResult {
   // (content-addressed scenario_id, services/scenario/scenario_id.py)
   // instead of recomputing it.
   cached?: boolean;
-  // Only buildings that are actually damaged, or "None"-modal but still a
-  // genuine close call against the runner-up damage state (margin under
-  // UNCERTAINTY_MARGIN) -- everything else is deliberately left out
-  // (docs/validation-region-expansion.md §4: shipping every evaluated
-  // building blew the payload up to 634MB for a single scenario, and a
-  // flat P(None) cutoff alone wasn't tight enough for a long,
-  // large-magnitude fault's gradual intensity decay -- see
-  // UNCERTAINTY_MARGIN's own comment). A building absent here is either
-  // not a close call (inside evaluated_region) or never evaluated
-  // (outside it).
-  buildings: BuildingDamageResult[];
   n_evaluated: number;
+  // Buildings with a predicted damage state other than None, over the
+  // whole evaluated set (same definition as municipality_stats).
+  n_damaged: number;
   elapsed_ms?: number;
   municipality_stats: MunicipalityStats[];
-}
-
-// The deployed Lambda writes large results to S3 instead of returning them
-// inline (a Function URL's default BUFFERED invoke mode caps responses at
-// 6MB -- see handler.py's `_write_to_s3`/`_response`), and hands back
-// `{ result_url: <presigned HTTPS URL> }` instead of a ScenarioResult
-// directly. The local dev server (local.py) never does this -- it always
-// returns the ScenarioResult inline -- so this has to handle both shapes.
-async function resolveScenarioResult(body: unknown): Promise<ScenarioResult> {
-  if (body && typeof body === "object" && "result_url" in body) {
-    const { result_url: resultUrl, cached } = body as { result_url: string; cached?: boolean };
-    const resp = await fetch(resultUrl);
-    if (!resp.ok) {
-      throw new Error(`fetching scenario result failed (${resp.status}): ${await resp.text()}`);
-    }
-    // The stored payload is the same object whether this request computed
-    // it or hit the cache -- only the wrapper knows which.
-    return { ...(await resp.json()), cached };
-  }
-  return body as ScenarioResult;
 }
 
 async function postScenario(path: string, body: unknown): Promise<ScenarioResult> {
@@ -160,7 +133,7 @@ async function postScenario(path: string, body: unknown): Promise<ScenarioResult
     const detail = await resp.text();
     throw new Error(`scenario request failed (${resp.status}): ${detail}`);
   }
-  return resolveScenarioResult(await resp.json());
+  return resp.json();
 }
 
 async function getScenario(path: string, params: Record<string, string | number>): Promise<ScenarioResult> {
@@ -170,7 +143,7 @@ async function getScenario(path: string, params: Record<string, string | number>
     const detail = await resp.text();
     throw new Error(`scenario request failed (${resp.status}): ${detail}`);
   }
-  return resolveScenarioResult(await resp.json());
+  return resp.json();
 }
 
 export function runManualScenario(req: ManualRuptureRequest): Promise<ScenarioResult> {

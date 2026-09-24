@@ -31,8 +31,15 @@ from __future__ import annotations
 
 from mapbox_vector_tile.Mapbox import vector_tile_pb2 as mvt_pb2
 
+# The generated protobuf message class. protoc-generated modules build their
+# classes at import time, so static analysis can't see this attribute.
+Tile = mvt_pb2.tile  # pyrefly: ignore
+
 _BUILDINGS_LAYER_NAME = "buildings"
+_DEBRIS_LAYER_NAME = "debris"
 _BUILDING_ID_KEY = "building_id"
+_RING_KEY = "ring"
+_DAMAGE_STATE_CODE_KEY = "damage_state_code"
 
 
 def join_tile_bytes(raw_tile_bytes: bytes, results: dict[str, dict]) -> bytes:
@@ -43,11 +50,33 @@ def join_tile_bytes(raw_tile_bytes: bytes, results: dict[str, dict]) -> bytes:
     buildings.json, so values are already plain Python bool/int/float,
     never numpy scalar types (the protobuf setters below would reject
     those)."""
-    tile = mvt_pb2.tile()
+    tile = Tile()
     tile.ParseFromString(raw_tile_bytes)
     for layer in tile.layers:
         if layer.name == _BUILDINGS_LAYER_NAME:
             _join_layer(layer, results)
+    return tile.SerializeToString()
+
+
+def join_debris_tile_bytes(raw_tile_bytes: bytes, results: dict[str, dict]) -> bytes:
+    """The debris.pmtiles counterpart of `join_tile_bytes` (ADR-0010 rings,
+    four features per building sharing one `building_id`, `ring` 1-4 =
+    the damage state that first produces it). Same `results` shape.
+
+    Keeps only each building's *one* ring matching its predicted
+    `damage_state_code` and drops every other ring feature, including all
+    four rings of any building the scenario didn't list. That is exactly
+    the set the map renders (one cumulative envelope per damaged
+    building), so the frontend needs no per-building data to pick
+    rings, and a joined debris tile is a fraction of the base tile's size
+    rather than a superset of it. The kept ring gets `damage_state_code`
+    as a tag; nothing else from `results` is copied (debris has no use for
+    the probabilities)."""
+    tile = Tile()
+    tile.ParseFromString(raw_tile_bytes)
+    for layer in tile.layers:
+        if layer.name == _DEBRIS_LAYER_NAME:
+            _join_debris_layer(layer, results)
     return tile.SerializeToString()
 
 
@@ -110,7 +139,7 @@ def _join_layer(layer, results: dict[str, dict]) -> None:
         idx = value_index.get(vk)
         if idx is not None:
             return idx
-        value_pb = mvt_pb2.tile.value()
+        value_pb = Tile.value()
         if vk[0] == "bool":
             value_pb.bool_value = value
         elif vk[0] == "int":
@@ -141,3 +170,76 @@ def _join_layer(layer, results: dict[str, dict]) -> None:
             new_tags.append(get_or_add_key(key))
             new_tags.append(get_or_add_value(value))
         feature.tags.extend(new_tags)
+
+
+def _join_debris_layer(layer, results: dict[str, dict]) -> None:
+    """Mutates `layer` in place -- see `join_debris_tile_bytes`."""
+    key_index = {key: i for i, key in enumerate(layer.keys)}
+    building_id_key_idx = key_index.get(_BUILDING_ID_KEY)
+    ring_key_idx = key_index.get(_RING_KEY)
+    if building_id_key_idx is None or ring_key_idx is None:
+        del layer.features[:]  # not a debris layer we understand; show nothing
+        return
+
+    code_key_idx = key_index.get(_DAMAGE_STATE_CODE_KEY)
+    if code_key_idx is None:
+        layer.keys.append(_DAMAGE_STATE_CODE_KEY)
+        code_key_idx = len(layer.keys) - 1
+
+    # damage_state_code -> index into layer.values, reusing an existing
+    # int Value (the ring numbers 1-4 are already in the table) when there
+    # is one.
+    value_index = {
+        vk[1]: i
+        for i, v in enumerate(layer.values)
+        if (vk := _pb_value_key(v)) is not None and vk[0] == "int"
+    }
+
+    def int_value_idx(n: int) -> int:
+        idx = value_index.get(n)
+        if idx is None:
+            value_pb = Tile.value()
+            value_pb.int_value = n
+            layer.values.append(value_pb)
+            idx = len(layer.values) - 1
+            value_index[n] = idx
+        return idx
+
+    kept = []
+    for feature in layer.features:
+        tags = feature.tags
+        building_id = None
+        ring = None
+        for i in range(0, len(tags), 2):
+            if tags[i] == building_id_key_idx:
+                building_id = layer.values[tags[i + 1]].string_value
+            elif tags[i] == ring_key_idx:
+                ring = _pb_number(layer.values[tags[i + 1]])
+        if building_id is None or ring is None:
+            continue
+        result = results.get(building_id)
+        if result is None:
+            continue
+        code = result.get(_DAMAGE_STATE_CODE_KEY)
+        if code is None or ring != code:
+            continue
+        feature.tags.extend([code_key_idx, int_value_idx(int(code))])
+        kept.append(feature)
+
+    # Rebuilding the repeated field (copies, not references -- protobuf
+    # repeated message fields own their elements).
+    kept_copies = [Tile.feature() for _ in kept]
+    for dst, src in zip(kept_copies, kept, strict=True):
+        dst.CopyFrom(src)
+    del layer.features[:]
+    layer.features.extend(kept_copies)
+
+
+def _pb_number(value_pb) -> int | float | None:
+    """A numeric `Value`'s number, whichever of MVT's numeric fields holds
+    it (tippecanoe writes small ints as int_value, but sint/uint/double are
+    all legal encodings of the same number)."""
+    for field in ("int_value", "sint_value", "uint_value", "double_value", "float_value"):
+        if value_pb.HasField(field):
+            return getattr(value_pb, field)
+    return None

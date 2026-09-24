@@ -34,7 +34,12 @@ import re
 from .building_lookup import get_building
 from .faults import get_fault, load_faults, round_near_point, rupture_anchor
 from .probability_level import resolve_probability_level
-from .response import compute_municipality_stats, evaluated_region, prepare_response_buildings
+from .response import (
+    compute_municipality_stats,
+    count_damaged,
+    evaluated_region,
+    prepare_response_buildings,
+)
 from .rupture import Rupture, from_fault, from_manual_input
 from .scenario_id import cache_enabled, fault_scenario_id, manual_scenario_id
 
@@ -47,7 +52,7 @@ BUILDINGS_PATH = os.environ.get("TWINER_BUILDINGS_PATH", "data/exposure/parts/*.
 EXPOSURE_PATH = os.environ.get("TWINER_EXPOSURE_PATH", "data/exposure/exposure.parquet")
 FRAGILITY_PATH = os.environ.get("TWINER_FRAGILITY_PATH", "data/fragility/fragility.parquet")
 FAULTS_PATH = os.environ.get("TWINER_FAULTS_PATH", "data/faults/qafi_faults.parquet")
-RESULTS_BUCKET = os.environ.get("TWINER_RESULTS_BUCKET")  # unset -> return inline
+RESULTS_BUCKET = os.environ.get("TWINER_RESULTS_BUCKET")  # unset -> no tile results, no cache
 
 
 def handler(event: dict, context) -> dict:
@@ -159,61 +164,25 @@ def _manual_scenario(body: dict) -> dict:
     return _run_and_respond(rupture, probability_level, scenario_id)
 
 
-def _s3_client():
-    # Not a project dependency on purpose (ADR-0001): the Lambda Python
-    # runtime bundles boto3 already, so we don't ship/pin it ourselves.
-    # Unresolvable for local type checking as a result.
-    import boto3  # pyrefly: ignore
-
-    # `endpoint_url` matters specifically for `generate_presigned_url`:
-    # boto3's default S3 client signs presigned URLs against the *global*
-    # `s3.amazonaws.com` endpoint regardless of `region_name`, which opt-in
-    # regions like eu-south-2 reject outright
-    # (IllegalLocationConstraintException) -- confirmed against the real
-    # bucket. AWS_REGION is always set by the Lambda runtime itself, not
-    # something this code sets.
-    region = os.environ["AWS_REGION"]
-    return boto3.client("s3", region_name=region, endpoint_url=f"https://s3.{region}.amazonaws.com")
-
-
-def _payload_key(scenario_id: str) -> str:
-    return f"scenarios/{scenario_id}.json"
-
-
-def _presigned_payload_url(s3, scenario_id: str) -> str:
-    # A presigned HTTPS URL, not the raw `s3://...` URI -- the browser
-    # can't resolve an s3:// scheme at all, and the results bucket is
-    # otherwise private (no public-read policy, unlike the data bucket --
-    # ADR-0016 -- since scenario results aren't meant to be broadly
-    # public). 5 minutes is generous for the frontend to fetch this right
-    # after receiving the response; a cache hit mints a fresh one.
-    return s3.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": RESULTS_BUCKET, "Key": _payload_key(scenario_id)},
-        ExpiresIn=300,
-    )
-
-
 def _cached_response(scenario_id: str) -> dict | None:
-    """A presigned URL to this content-addressed id's stored payload
-    (scenario_id.py), if the cache is on and one exists -- checked before
-    the rupture is even built, so a hit never pays for engine/hazardlib's
-    import or any compute. `scenarios/<id>.json` is written last in
-    `_run_and_respond` (after the tile-join results), so its presence
-    implies the tiles Lambda can serve this id too; both expire together
-    under ResultsBucket's 30-day lifecycle rule, which doubles as the
-    cache's TTL."""
+    """This content-addressed id's stored response (scenario_id.py), if the
+    cache is on and one exists -- checked before the rupture is even
+    built, so a hit never pays for engine/hazardlib's import or any
+    compute. `response.json` is written last in `_run_and_respond` (after
+    the tile-join results), so its presence implies the tiles Lambda can
+    serve this id too; both expire together under ResultsBucket's 30-day
+    lifecycle rule, which doubles as the cache's TTL."""
     if not cache_enabled() or RESULTS_BUCKET is None:
         return None
-    s3 = _s3_client()
-    try:
-        s3.head_object(Bucket=RESULTS_BUCKET, Key=_payload_key(scenario_id))
-    except s3.exceptions.ClientError as e:
-        if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
-            return None
-        raise
+    # Deferred import: keeps boto3 out of the cold path of routes that
+    # never reach a scenario (see _run_and_respond's own comment).
+    from tiles.results_store import read_response
+
+    payload = read_response(RESULTS_BUCKET, scenario_id)
+    if payload is None:
+        return None
     print(f"scenario: cache hit {scenario_id}")
-    return _response(200, {"result_url": _presigned_payload_url(s3, scenario_id), "cached": True})
+    return _response(200, {**payload, "cached": True})
 
 
 def _run_and_respond(rupture: Rupture, probability_level: str, scenario_id: str) -> dict:
@@ -241,27 +210,16 @@ def _run_and_respond(rupture: Rupture, probability_level: str, scenario_id: str)
         damage_percentile=level_params.damage_percentile,
     )
     n_evaluated = len(result)
+    n_damaged = count_damaged(result)
     municipality_stats = compute_municipality_stats(result)
-    result = prepare_response_buildings(result)
+    buildings = prepare_response_buildings(result)
 
-    if RESULTS_BUCKET is not None:
-        # Deferred import, same reasoning as engine/ground_motion above --
-        # keeps boto3 out of the cold-path routes that never reach this
-        # function. Writes the same status.json/municipality_stats.json/
-        # buildings.json layout local dev's results_store.py writes to
-        # local disk, so the tiles Lambda (services/tiles) can read a prod
-        # scenario's results the same way it reads a local one.
-        # tiles.results_store.write_buildings takes a plain list of dicts,
-        # not a DataFrame -- that module has to stay free of pandas/pyarrow
-        # to fit Lambda's 250MB zip-package limit (see its own docstring),
-        # so the DataFrame -> records conversion happens here instead,
-        # where pandas is already a dependency regardless.
-        from tiles.results_store import init_scenario, write_buildings, write_municipality_stats
-
-        init_scenario(RESULTS_BUCKET, scenario_id)
-        write_municipality_stats(RESULTS_BUCKET, scenario_id, municipality_stats)
-        write_buildings(RESULTS_BUCKET, scenario_id, result.to_dict(orient="records"))
-
+    # The response itself: everything the frontend needs, and nothing
+    # per-building -- building and debris damage reach the map through the
+    # tiles Lambda's joins against the results written below (ADR-0019),
+    # so the response stays a few hundred KB at most (municipality_stats
+    # is bounded by ~8,200 municipalities) and always fits inline under a
+    # Function URL's 6MB BUFFERED cap.
     payload = {
         "scenario_id": scenario_id,
         "rupture": {
@@ -273,42 +231,43 @@ def _run_and_respond(rupture: Rupture, probability_level: str, scenario_id: str)
             "probability_level": probability_level,
         },
         "evaluated_region": evaluated_region(rupture, radius_km),
-        "buildings": result.to_dict(orient="records"),
         "n_evaluated": n_evaluated,
+        "n_damaged": n_damaged,
         "municipality_stats": municipality_stats,
     }
 
-    if RESULTS_BUCKET is None:
-        return _response(200, {**payload, "cached": False})
+    if RESULTS_BUCKET is not None:
+        # Deferred import, same reasoning as engine/ground_motion above --
+        # keeps boto3 out of the cold-path routes that never reach this
+        # function. Writes the same layout local dev's results_store.py
+        # writes to local disk, so the tiles Lambda (services/tiles) can
+        # read a prod scenario's results the same way it reads a local one.
+        # tiles.results_store.write_buildings takes a plain list of dicts,
+        # not a DataFrame -- that module has to stay free of pandas/pyarrow
+        # to fit Lambda's 250MB zip-package limit (see its own docstring),
+        # so the DataFrame -> records conversion happens here instead,
+        # where pandas is already a dependency regardless.
+        from tiles.results_store import (
+            init_scenario,
+            write_buildings,
+            write_municipality_stats,
+            write_response,
+        )
 
-    return _response(200, {**_write_large_payload_to_s3(payload, scenario_id), "cached": False})
+        init_scenario(RESULTS_BUCKET, scenario_id)
+        write_municipality_stats(RESULTS_BUCKET, scenario_id, municipality_stats)
+        write_buildings(RESULTS_BUCKET, scenario_id, buildings.to_dict(orient="records"))
+        # Last: marks this id as a complete, reusable result (the cache).
+        write_response(RESULTS_BUCKET, scenario_id, payload)
 
-
-def _write_large_payload_to_s3(payload: dict, scenario_id: str) -> dict:
-    # Keyed by the same scenario_id as the results_store.py writes above
-    # (not an independent id) -- one id per scenario, which also makes this
-    # object the scenario cache's entry (`_cached_response`).
-    s3 = _s3_client()
-    s3.put_object(
-        Bucket=RESULTS_BUCKET,
-        Key=_payload_key(scenario_id),
-        Body=json.dumps(payload).encode("utf-8"),
-        ContentType="application/json",
-    )
-    # scenario_id isn't repeated at this outer level -- scenarioApi.ts's
-    # resolveScenarioResult only ever reads `result_url`/`cached` off this
-    # wrapper and returns the *fetched* JSON (which already has
-    # scenario_id, set on `payload` above) as the real ScenarioResult.
-    return {"result_url": _presigned_payload_url(s3, scenario_id)}
+    return _response(200, {**payload, "cached": False})
 
 
 def _response(status_code: int, body: dict) -> dict:
     # Gzipped + base64 (Lambda Function URL requires base64 for a binary
-    # body): the `buildings` payload is repetitive JSON that compresses
-    # well, same rationale as local.py's GZipMiddleware. Also matters more
-    # here than in local dev -- a Function URL's default BUFFERED invoke
-    # mode caps responses at 6MB, and an uncompressed large-fault payload
-    # can run well past that.
+    # body): /faults' trace geometries and a nationwide scenario's
+    # municipality_stats are repetitive JSON that compresses well, same
+    # rationale as local.py's GZipMiddleware.
     raw = json.dumps(body).encode("utf-8")
     compressed = gzip.compress(raw)
     return {
