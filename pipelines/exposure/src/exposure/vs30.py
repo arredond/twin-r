@@ -18,7 +18,7 @@ values covering Spain at ~30 arc-second spacing (~800m at Spain's
 latitudes), built from slope + geology proxies (Wald & Allen 2007-style
 topographic slope, refined with geological era). This is the same site
 model OpenQuake-based European risk calculations use as GMPE input, so
-using it here keeps twin-r consistent with how the rest of Europe runs
+using it here keeps twiner consistent with how the rest of Europe runs
 Akkar-family GMPEs with site effects, without inventing a second
 amplification model on top of the GMPE's own site term.
 """

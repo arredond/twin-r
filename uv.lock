@@ -12,13 +12,13 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "twin-r",
-    "twin-r-exposure",
-    "twin-r-faults",
-    "twin-r-fragility",
-    "twin-r-infra",
-    "twin-r-scenario",
-    "twin-r-tiles",
+    "twiner",
+    "twiner-exposure",
+    "twiner-faults",
+    "twiner-fragility",
+    "twiner-infra",
+    "twiner-scenario",
+    "twiner-tiles",
 ]
 
 [[package]]
@@ -2120,7 +2120,7 @@ wheels = [
 ]
 
 [[package]]
-name = "twin-r"
+name = "twiner"
 version = "0.1.0"
 source = { virtual = "." }
 
@@ -2145,7 +2145,7 @@ dev = [
 ]
 
 [[package]]
-name = "twin-r-exposure"
+name = "twiner-exposure"
 version = "0.1.0"
 source = { editable = "pipelines/exposure" }
 dependencies = [
@@ -2170,7 +2170,7 @@ requires-dist = [
 ]
 
 [[package]]
-name = "twin-r-faults"
+name = "twiner-faults"
 version = "0.1.0"
 source = { editable = "pipelines/faults" }
 dependencies = [
@@ -2189,7 +2189,7 @@ requires-dist = [
 ]
 
 [[package]]
-name = "twin-r-fragility"
+name = "twiner-fragility"
 version = "0.1.0"
 source = { editable = "pipelines/fragility" }
 dependencies = [
@@ -2206,7 +2206,7 @@ requires-dist = [
 ]
 
 [[package]]
-name = "twin-r-infra"
+name = "twiner-infra"
 version = "0.1.0"
 source = { editable = "infra" }
 dependencies = [
@@ -2223,7 +2223,7 @@ requires-dist = [
 ]
 
 [[package]]
-name = "twin-r-scenario"
+name = "twiner-scenario"
 version = "0.1.0"
 source = { editable = "services/scenario" }
 dependencies = [
@@ -2234,7 +2234,7 @@ dependencies = [
     { name = "openquake-engine" },
     { name = "pmtiles" },
     { name = "pyarrow" },
-    { name = "twin-r-tiles" },
+    { name = "twiner-tiles" },
     { name = "uvicorn" },
 ]
 
@@ -2247,12 +2247,12 @@ requires-dist = [
     { name = "openquake-engine", specifier = ">=3.19" },
     { name = "pmtiles", specifier = ">=3.8.1" },
     { name = "pyarrow", specifier = ">=17.0" },
-    { name = "twin-r-tiles", editable = "services/tiles" },
+    { name = "twiner-tiles", editable = "services/tiles" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [[package]]
-name = "twin-r-tiles"
+name = "twiner-tiles"
 version = "0.1.0"
 source = { editable = "services/tiles" }
 dependencies = [

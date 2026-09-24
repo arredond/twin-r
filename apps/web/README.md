@@ -1,6 +1,6 @@
-# twin-r web
+# twiner web
 
-React + MapLibre GL frontend for the twin-r seismic scenario simulator. See
+React + MapLibre GL frontend for the twiner seismic scenario simulator. See
 the repo root [`README.md`](../../README.md) for the full quickstart and
 [`docs/milestone-1-plan.md`](../../docs/milestone-1-plan.md) for context.
 

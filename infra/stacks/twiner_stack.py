@@ -33,7 +33,7 @@ TILES_SERVICE_DIR = REPO_ROOT / "services" / "tiles"
 FRONTEND_ORIGINS = ["https://twiner.arredon.do", "http://localhost:5173"]
 
 
-class TwinRStack(Stack):
+class TwinerStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
@@ -183,15 +183,15 @@ class TwinRStack(Stack):
                 # `parts/*.buildings.parquet` glob local dev uses -- see
                 # region.compact_buildings_for_cloud's docstring for why
                 # the glob doesn't work well over S3.
-                "TWIN_R_BUILDINGS_PATH": f"s3://{data_bucket.bucket_name}/exposure/buildings-cloud.parquet",
-                "TWIN_R_EXPOSURE_PATH": f"s3://{data_bucket.bucket_name}/exposure/exposure.parquet",
-                "TWIN_R_FRAGILITY_PATH": f"s3://{data_bucket.bucket_name}/fragility/fragility.parquet",
+                "TWINER_BUILDINGS_PATH": f"s3://{data_bucket.bucket_name}/exposure/buildings-cloud.parquet",
+                "TWINER_EXPOSURE_PATH": f"s3://{data_bucket.bucket_name}/exposure/exposure.parquet",
+                "TWINER_FRAGILITY_PATH": f"s3://{data_bucket.bucket_name}/fragility/fragility.parquet",
                 # Missing here would 500 every fault-mode (non-manual)
                 # scenario request in the cloud -- handler.py falls back to
                 # a local-only default path that doesn't exist in Lambda.
-                "TWIN_R_FAULTS_PATH": f"s3://{data_bucket.bucket_name}/faults/qafi_faults.parquet",
-                "TWIN_R_MUNICIPALITIES_PATH": f"s3://{data_bucket.bucket_name}/exposure/municipalities.parquet",
-                "TWIN_R_RESULTS_BUCKET": results_bucket.bucket_name,
+                "TWINER_FAULTS_PATH": f"s3://{data_bucket.bucket_name}/faults/qafi_faults.parquet",
+                "TWINER_MUNICIPALITIES_PATH": f"s3://{data_bucket.bucket_name}/exposure/municipalities.parquet",
+                "TWINER_RESULTS_BUCKET": results_bucket.bucket_name,
             },
         )
         data_bucket.grant_read(scenario_fn)
@@ -235,8 +235,8 @@ class TwinRStack(Stack):
             memory_size=512,
             timeout=Duration.seconds(10),
             environment={
-                "TWIN_R_DATA_BUCKET": data_bucket.bucket_name,
-                "TWIN_R_RESULTS_BUCKET": results_bucket.bucket_name,
+                "TWINER_DATA_BUCKET": data_bucket.bucket_name,
+                "TWINER_RESULTS_BUCKET": results_bucket.bucket_name,
             },
         )
         # Read-only both ways -- this function never writes to either

@@ -157,11 +157,11 @@ def data_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def client(data_dir: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("TWIN_R_DATA_DIR", str(data_dir))
-    monkeypatch.delenv("TWIN_R_BUILDINGS_PATH", raising=False)
-    monkeypatch.delenv("TWIN_R_EXPOSURE_PATH", raising=False)
-    monkeypatch.delenv("TWIN_R_FRAGILITY_PATH", raising=False)
-    monkeypatch.delenv("TWIN_R_FAULTS_PATH", raising=False)
+    monkeypatch.setenv("TWINER_DATA_DIR", str(data_dir))
+    monkeypatch.delenv("TWINER_BUILDINGS_PATH", raising=False)
+    monkeypatch.delenv("TWINER_EXPOSURE_PATH", raising=False)
+    monkeypatch.delenv("TWINER_FRAGILITY_PATH", raising=False)
+    monkeypatch.delenv("TWINER_FAULTS_PATH", raising=False)
 
     from scenario import local
 

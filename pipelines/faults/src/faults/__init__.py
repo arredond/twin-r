@@ -1,4 +1,4 @@
-"""twin-r faults pipeline: QAFI (IGME) active faults -> faults.parquet.
+"""twiner faults pipeline: QAFI (IGME) active faults -> faults.parquet.
 
 Source: IGME's official QAFI v4 shapefile download (see ADR-0004,
 docs/decisions/0004-qafi-shapefile-source.md, for why this replaced an

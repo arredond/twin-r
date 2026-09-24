@@ -6,7 +6,7 @@ Status: accepted, implemented end-to-end (pipelines + scenario service)
 
 `docs/validation-lorca-2011.md` §10 (added after the 2011 Lorca sanity
 check, §1–§9) found two independent, currently-offsetting problems with
-`twin-r`'s exposure/fragility chain, both real correctness issues rather
+`twiner`'s exposure/fragility chain, both real correctness issues rather
 than a single "the numbers are off" gap:
 
 1. **§10.1 — the taxonomy heuristic is too coarse, and picked the mildest
@@ -95,10 +95,10 @@ improve it further.
 
 ### `docs/TAXONOMY.md`
 
-New reference doc: what `twin-r` assigns today and why, what MERISUR does
+New reference doc: what `twiner` assigns today and why, what MERISUR does
 instead (three lines of work — field survey, mechanical models on Risk-UE
 MBTs, remote-sensing ML classification — per `merisur.md` §4.5), a direct
-comparison table, and a ranked list of what would improve `twin-r`'s
+comparison table, and a ranked list of what would improve `twiner`'s
 heuristic further (get UPM's answer on Lorca's five Risk-UE masonry MBTs;
 vendor more Martins & Silva masonry sub-classes; the fuller code-generation
 timeline `initial-chatgpt.md` sketched; a remote-sensing classification

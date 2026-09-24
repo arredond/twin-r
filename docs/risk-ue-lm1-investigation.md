@@ -2,7 +2,7 @@
 
 Status: research only, no code changes. Written in response to
 `docs/validation-lorca-2011.md` §11.2 flagging RISK-UE LM1 as the more
-likely explanation for the remaining twin-r/MERISUR gap at Lorca, and a
+likely explanation for the remaining twiner/MERISUR gap at Lorca, and a
 request to scope (a) what implementing it would take and (b) whether
 buildings could carry multiple vulnerability classifications (one per
 methodology) so a scenario can pick which one to run against.
@@ -15,7 +15,7 @@ explicitly in a primary source · 🟡 inferred with reasonable confidence ·
 
 RISK-UE LM1 ("Level 1", the macroseismic/vulnerability-index method,
 Giovinazzi & Lagomarsino 2004/2006) is a different **category** of model
-from what `twin-r` runs today, not just a different data source. Core
+from what `twiner` runs today, not just a different data source. Core
 formula 🟢 (verified against multiple independent citations of the same
 published equation):
 
@@ -25,7 +25,7 @@ published equation):
 
 - `μD` — mean damage grade, continuous in `[0, 5]` (EMS-98 has **5**
   damage grades: D1 Negligible/Slight ... D5 Destruction — not the same
-  cardinality as the **4** HAZUS-style states `twin-r` uses today, None/
+  cardinality as the **4** HAZUS-style states `twiner` uses today, None/
   Slight/Moderate/Extensive/Complete; a mapping between the two grade
   systems is needed regardless of everything else below, see §4).
 - `I` — macroseismic intensity, **EMS-98 scale**, a single scalar per
@@ -59,7 +59,7 @@ published equation):
    building's condition, regularity in plan/height, position in block
    (end-of-terrace vs. interior), ground morphology, etc. — the same kind
    of per-building structural detail Risk-UE's own field campaigns
-   collected for Lorca (`merisur.md` §4.5 item 1) and that `twin-r`'s
+   collected for Lorca (`merisur.md` §4.5 item 1) and that `twiner`'s
    Catastro-only pipeline still can't observe (no field survey, by
    project constraint). Practically: most of these modifiers would have
    to default to "no adjustment" for every building, same posture as
@@ -76,15 +76,15 @@ published equation):
 4. **Macroseismic intensity `I` at each building's site** — see §3, the
    real blocker.
 
-## 3. The real blocker: `I` is not an output `twin-r` currently produces
+## 3. The real blocker: `I` is not an output `twiner` currently produces
 
-`twin-r`'s entire hazard chain (`ground_motion.py`) computes **PGA/SA**
+`twiner`'s entire hazard chain (`ground_motion.py`) computes **PGA/SA**
 via the Akkar, Sandıkkaya & Bommer (2014) GMPE — an instrumental ground-
 motion measure, not macroseismic intensity. RISK-UE LM1 needs the latter.
 Two ways to bridge this, both real engineering choices, not a data lookup:
 
 - **(a) A Ground-Motion-to-Intensity Conversion Equation (GMICE)**:
-  convert the PGA/SA `twin-r` already computes into an equivalent EMS-98
+  convert the PGA/SA `twiner` already computes into an equivalent EMS-98
   intensity per site. Precedent exists (USGS ShakeMap uses this
   internally, e.g. Worden et al. 2012 for PGA/PGV→MMI; EMS-98 and MMI are
   close enough in practice that cross-application is common but not

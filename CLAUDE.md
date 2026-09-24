@@ -1,4 +1,4 @@
-# twin-r
+# twiner
 
 ## Before starting any task
 
@@ -21,11 +21,11 @@
 
 ## Running the app locally
 
-- Always start the local dev stack with `bin/twinr start` (or `restart`),
+- Always start the local dev stack with `bin/twiner start` (or `restart`),
   never by manually running `uvicorn`/`npm run dev` yourself -- it runs
-  both the scenario API and web frontend in a tmux session (`twinr
+  both the scenario API and web frontend in a tmux session (`twiner
   status`/`attach`/`stop` manage it). Frontend: http://localhost:5173.
-  Scenario API: http://localhost:8000. `bin/twinr start prod` points the
+  Scenario API: http://localhost:8000. `bin/twiner start prod` points the
   local frontend at the deployed AWS backend instead.
 - Do not use the claude-in-chrome browser extension/tools on this
   project. Debug the frontend via curl/JS logic review, network request

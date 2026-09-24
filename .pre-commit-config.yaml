@@ -1,4 +1,4 @@
-# Pre-commit hooks for twin-r's Python packages (services/, pipelines/,
+# Pre-commit hooks for twiner's Python packages (services/, pipelines/,
 # infra/). See docs/ for the project's broader conventions.
 #
 # Install once per clone: uv run pre-commit install

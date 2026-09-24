@@ -6,7 +6,7 @@ import type { DamageState } from "./damageColors";
 export const API_URL = import.meta.env.VITE_SCENARIO_API_URL ?? "http://localhost:8000";
 
 // Client for the tiles function (services/tiles) -- a separate deployed
-// Lambda from the scenario one above (see infra/stacks/twin_r_stack.py's
+// Lambda from the scenario one above (see infra/stacks/twiner_stack.py's
 // own comment on why: no openquake/numpy/scipy weight, fast cold start,
 // doesn't compete with scenario compute for concurrency). Defaults to the
 // *same* local dev server as API_URL, since local.py serves both

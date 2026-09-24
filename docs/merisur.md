@@ -2,7 +2,7 @@
 
 This document summarizes everything we could establish about MERISUR — the seismic
 scenario simulator built by Universidad Politécnica de Madrid (UPM) for the city of
-Lorca — as a reference for building `twin-r`. It combines primary sources (papers,
+Lorca — as a reference for building `twiner`. It combines primary sources (papers,
 the live tool, QAFI/IGME) with a structured reconstruction of the parts that aren't
 publicly documented in detail. See [`initial-chatgpt.md`](./initial-chatgpt.md) for
 the exploratory conversation this doc was distilled from; treat that file as raw
@@ -115,7 +115,7 @@ This chain is explicitly documented across the 2017/2018 papers. 🟢
     not the real story.** The official v4 shapefile gives this exact
     segment `Length = 30 km` and `MaxMagnitu = 6.7` (range 6.4–7.0, citing
     Ortuño et al. 2012 and Martínez-Díaz et al. 2012) — squarely consistent
-    with MERISUR's 6.9. The actual problem was on our side: `twin-r`'s
+    with MERISUR's 6.9. The actual problem was on our side: `twiner`'s
     faults pipeline originally queried the MapServer REST layer, whose
     geometry for this same fault record is **~96 km long — over 3x the
     official 30 km** — an unreliable geometry, not a missing-field issue.
@@ -123,7 +123,7 @@ This chain is explicitly documented across the 2017/2018 papers. 🟢
     `validation-lorca-2011.md` for the full trace of this investigation. 🟢
   - QAFI is CC BY-SA 4.0, versioned, and explicitly *not* a substitute for
     site-specific studies — a caveat worth repeating to any public-entity
-    consumer of `twin-r`. 🟢
+    consumer of `twiner`. 🟢
 - **Manual mode**: user supplies lat/lon, Mw, strike, dip, Ztor, rake directly —
   no fault required. 🟢
 
@@ -182,14 +182,14 @@ tool ingests) draws on: 🟢
   height, roof type/slope, 3D geometry.
 - Manual **fieldwork** campaigns in Lorca neighborhoods (structural system,
   irregularities, soft-storey, non-structural elements) — this is exactly the
-  category of work `twin-r` has ruled out doing itself (see project brief: "no
+  category of work `twiner` has ruled out doing itself (see project brief: "no
   field work will be done").
 - Post-2011-earthquake ground-truth damage database, used mainly to calibrate
   vulnerability. 🟢
 
 We found **no public download** of the actual Lorca building/vulnerability
 shapefile used by the live tool (checked UPM's GIIS group page, Zenodo,
-Archivo Digital UPM). 🔴 Practical implication for `twin-r`: even a "clone of
+Archivo Digital UPM). 🔴 Practical implication for `twiner`: even a "clone of
 MERISUR for Lorca" cannot reuse MERISUR's own exposure data as a starting
 point — we'd have to (re)derive it from Catastro/OSM ourselves, same as for the
 rest of Spain. This removes any incentive to special-case Lorca for milestone 1
@@ -217,7 +217,7 @@ and the papers caution not to conflate them: 🟢
    result about *how MERISUR assigned* vulnerability classes at scale, not
    necessarily something the live tool executes at request time.
 
-**A fourth, separate line found later (2025), while chasing why twin-r's
+**A fourth, separate line found later (2025), while chasing why twiner's
 own damage output stayed far below MERISUR's even after site amplification
 was added — ADR-0015, `validation-lorca-2011.md` §10.7):** a paper titled
 *"Vulnerabilidad y daño en el terremoto de Lorca de 2011"* and a related
@@ -232,14 +232,14 @@ because it's a **different category of model**, not just different
 numbers: RISK-UE LM1 is semi-empirical/macroseismic (a Vulnerability Index
 per building type, calibrated directly against real EMS-98 damage
 statistics from Mediterranean/Italian masonry earthquakes), whereas
-`twin-r`'s Martins & Silva (2020) substitute (§4.6, `validation-lorca-2011.md`)
+`twiner`'s Martins & Silva (2020) substitute (§4.6, `validation-lorca-2011.md`)
 is a globally-averaged *analytical* model (nonlinear time-history analysis
 of representative archetypes, not calibrated against any real
 Mediterranean masonry damage record). Analytically-derived global curves
 are documented in the literature to run more conservative (lower P(damage)
 at a given intensity) than damage-calibrated semi-empirical ones for
 exactly this building type — a plausible, though not yet confirmed,
-explanation for a large share of the remaining twin-r/MERISUR gap.
+explanation for a large share of the remaining twiner/MERISUR gap.
 
 ### 4.6 Damage model: IDCM (FEMA 440)
 
@@ -317,7 +317,7 @@ From the live tool at `merisur.topografia.upm.es`: 🟢
 - Static **Home / Information / Useful Links / Contact** navigation, no sign
   of authentication, dataset upload, or scenario save/share.
 
-This maps well onto a first UX shape for `twin-r`'s MVP: source panel → run →
+This maps well onto a first UX shape for `twiner`'s MVP: source panel → run →
 damage layer → (optional/expensive) debris layer.
 
 ## 6. Data source summary table
@@ -348,11 +348,11 @@ with each answer.
    publishes a literature-sourced Mmax (6.7) for the Alhama de Murcia
    segment nearest Lorca, consistent with MERISUR's 6.9. See the corrected
    §4.1 above and [ADR-0004](./decisions/0004-qafi-shapefile-source.md).
-   `twin-r` now uses that published value where available and only falls
+   `twiner` now uses that published value where available and only falls
    back to a length-based estimate (on the official `Length` field) for the
    ~40% of faults with no published Mmax.
 3. No public Lorca building/vulnerability dataset was found — confirms
-   `twin-r` must build exposure from Catastro/OSM from day one, even for a
+   `twiner` must build exposure from Catastro/OSM from day one, even for a
    Lorca-scoped MVP; there's no MERISUR dataset to bootstrap from.
 4. The live tool's actual request/response format (network calls, whether
    computation is server-side or client-side, tile formats) is unknown — worth

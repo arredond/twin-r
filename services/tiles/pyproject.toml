@@ -1,7 +1,7 @@
 [project]
-name = "twin-r-tiles"
+name = "twiner-tiles"
 version = "0.1.0"
-description = "twin-r tile-join function: MVT tile + a scenario's thin results -> a joined tile, runnable as a Lambda or locally"
+description = "twiner tile-join function: MVT tile + a scenario's thin results -> a joined tile, runnable as a Lambda or locally"
 requires-python = ">=3.12"
 dependencies = [
     # Deliberately NOT pandas/pyarrow -- results_store.py reads/writes

@@ -4,7 +4,7 @@ The AWS-deployed scenario Lambda (ADR-0016) is functionally correct --
 verified end-to-end against both fault mode (`fault_id=ES412`) and manual
 mode -- but noticeably slower than the local dev server for large-radius
 scenarios. This is a working-notes doc, not an ADR: nothing here has been
-root-caused yet, just observed and hypothesized. Use `bin/twinr start prod`
+root-caused yet, just observed and hypothesized. Use `bin/twiner start prod`
 to reproduce against the real deployed backend from the local frontend.
 
 ## Observed

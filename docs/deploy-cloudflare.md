@@ -27,7 +27,7 @@ docs/deploy-aws-setup.md).
      `https://xxxxxxxx.lambda-url.eu-west-1.on.aws/`)
    - `VITE_TILES_API_URL` — the `TilesFunctionUrl` CDK output, same step
      (a separate Lambda/Function URL from the scenario one above -- see
-     infra/stacks/twin_r_stack.py's own comment on why they're split).
+     infra/stacks/twiner_stack.py's own comment on why they're split).
      Falls back to `VITE_SCENARIO_API_URL` if unset, which is wrong in
      production (that's the scenario function's URL, not the tiles one) --
      always set this explicitly for a real deploy.
@@ -68,7 +68,7 @@ Since `arredon.do` is already a Cloudflare-managed zone:
 
 ## 3. CORS reminder
 
-The S3 data bucket's CORS policy (`infra/stacks/twin_r_stack.py`,
+The S3 data bucket's CORS policy (`infra/stacks/twiner_stack.py`,
 `FRONTEND_ORIGINS`) must include `https://twiner.arredon.do` — it does by
 default in the stack as written, but if you change the domain, update that
 list and re-run `cdk deploy` before the frontend will be able to fetch

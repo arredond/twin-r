@@ -1,4 +1,4 @@
-"""twin-r exposure pipeline: Catastro buildings -> buildings.parquet + exposure.parquet.
+"""twiner exposure pipeline: Catastro buildings -> buildings.parquet + exposure.parquet.
 
 Source: Spanish Directorate General for Cadastre (Catastro), INSPIRE
 "Buildings" ATOM download service. Verified working root feed (see

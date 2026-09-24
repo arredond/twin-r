@@ -39,7 +39,7 @@ These were confirmed with the project owner before planning the architecture:
 
 Documented here so nobody mistakes these for oversights:
 
-| MERISUR | twin-r MVP | Why |
+| MERISUR | twiner MVP | Why |
 |---|---|---|
 | Lorca 5-class soil microzonation (Navarro et al. 2014) | No site amplification, or a flat Vs30-derived factor if trivially available | Lorca's microzonation isn't republished/accessible to us and isn't portable to the rest of Spain anyway (milestone 2 goal). Starting without it is honest about the gap rather than faking precision. |
 | IDCM/FEMA 440 capacity-curve + performance-point method | Fragility functions applied directly to ground-motion intensity (standard OpenQuake scenario-damage approach) | We don't have MERISUR's Lorca capacity curves. [Martins & Silva (2020)](https://github.com/lmartins88/global_fragility_vulnerability) publish an open, GEM-taxonomy-based global fragility/vulnerability function set usable directly with OpenQuake — no pushover analysis or capacity curves needed on our side. |
@@ -165,7 +165,7 @@ Input: either `{fault_id}` (automatic) or
 ## 6. Repo structure (proposed)
 
 ```
-twin-r/
+twiner/
   apps/
     web/              # MapLibre frontend
   services/

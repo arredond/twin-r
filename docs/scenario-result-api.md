@@ -12,10 +12,10 @@ Three runtimes share the same domain logic (`engine.py`/`rupture.py`/
 `ground_motion.py`/`damage.py`) behind two thin adapters:
 
 - **`services/scenario/src/scenario/local.py`** -- FastAPI app, what
-  `bin/twinr` runs locally (`uvicorn scenario.local:app`). This is what the
+  `bin/twiner` runs locally (`uvicorn scenario.local:app`). This is what the
   frontend talks to in dev, and by default (`VITE_SCENARIO_API_URL` unset).
 - **`services/scenario/src/scenario/handler.py`** -- AWS Lambda adapter
-  behind a Function URL (`infra/stacks/twin_r_stack.py`), for a deployed
+  behind a Function URL (`infra/stacks/twiner_stack.py`), for a deployed
   frontend pointed at `VITE_SCENARIO_API_URL`.
 
 Both expose the same four routes:
@@ -103,7 +103,7 @@ GMPE/fragility compute itself. The fix -- the adaptive
 plus the non-"None" filtering described above -- brought the worst
 measured case down to **12.8MB** and typical cases to 0KB-3MB, fast
 enough that §4's remaining two options ("results-to-URL... `handler.py`'s
-Lambda path already supports this via `TWIN_R_RESULTS_BUCKET`" and "a
+Lambda path already supports this via `TWINER_RESULTS_BUCKET`" and "a
 binary/columnar response format") were explicitly left undone, "no longer
 an urgent problem, just a further optimization if usage patterns ever
 demand it."
@@ -161,7 +161,7 @@ actually looking.
    picking the same fault/probability-level twice recomputes and
    re-downloads the full payload both times.
 3. **Deployed (Lambda) path returns a shape the frontend can't read.**
-   `infra/stacks/twin_r_stack.py` always sets `TWIN_R_RESULTS_BUCKET`, so
+   `infra/stacks/twiner_stack.py` always sets `TWINER_RESULTS_BUCKET`, so
    `handler.py`'s `RESULTS_BUCKET is None` branch is dead in the deployed
    stack -- every request there returns `{"result_url": "s3://..."}`
    instead of the inline payload. `apps/web/src/scenarioApi.ts` has no

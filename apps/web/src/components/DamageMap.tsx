@@ -153,7 +153,7 @@ const FAULTS_SOURCE_ID = "faults";
 const FAULTS_LAYER_ID = "faults-line";
 const FAULTS_SELECTED_LAYER_ID = "faults-line-selected";
 
-// Free, no-API-key basemap style. Swap for a twin-r-branded style later.
+// Free, no-API-key basemap style. Swap for a twiner-branded style later.
 const BASEMAP_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 
 // Mainland Spain, zoomed out enough to see most of it at once.
@@ -504,7 +504,7 @@ function addBuildingsSourceAndLayers(map: MapLibreMap, scenarioId: string | null
     // silently goes wrong again the moment this file is regenerated
     // correctly (caps detail below whatever the fixed archive can
     // actually support, with no error to catch it). The real fix belongs
-    // in the data (see twin-r-8a's fix-municipality-aggregation
+    // in the data (see twiner-8a's fix-municipality-aggregation
     // investigation into this same file's building_id mismatches) --
     // once buildings.pmtiles is regenerated with an honest header, this
     // default (no override) is already correct with no frontend change

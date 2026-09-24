@@ -1,4 +1,4 @@
-"""twin-r fragility pipeline: Martins & Silva (2020) global fragility functions.
+"""twiner fragility pipeline: Martins & Silva (2020) global fragility functions.
 
 Source: https://github.com/lmartins88/global_fragility_vulnerability
 (CC BY-SA 4.0 -- attribution required, see docs/merisur.md §4.5/§4.9 and

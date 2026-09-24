@@ -1,4 +1,4 @@
-# AWS account setup for the twin-r backend
+# AWS account setup for the twiner backend
 
 Follow this once, before the first `cdk deploy`. See ADR-0001 and ADR-0016
 for why the stack looks the way it does. Costs: the pieces here (S3, one
@@ -47,7 +47,7 @@ uses a separate IAM identity instead.
 aws configure sso
 ```
 
-- SSO session name: anything, e.g. `twin-r`
+- SSO session name: anything, e.g. `twiner`
 - SSO start URL: shown on the Identity Center dashboard ("AWS access
   portal URL")
 - SSO region: the region Identity Center itself is enabled in (shown on
@@ -57,17 +57,17 @@ aws configure sso
   prompted
 - CLI default client Region: pick where the *stack* should live (see
   step 4 below) -- `eu-south-2`
-- Give the resulting profile a name, e.g. `twin-r-admin`
+- Give the resulting profile a name, e.g. `twiner-admin`
 
 Verify it works:
 
 ```
-aws sts get-caller-identity --profile twin-r-admin
+aws sts get-caller-identity --profile twiner-admin
 ```
 
-Every CDK/AWS CLI command below assumes `--profile twin-r-admin` (or
-`AWS_PROFILE=twin-r-admin` exported in your shell) -- SSO tokens expire after a
-few hours, re-run `aws sso login --profile twin-r-admin` when a command starts
+Every CDK/AWS CLI command below assumes `--profile twiner-admin` (or
+`AWS_PROFILE=twiner-admin` exported in your shell) -- SSO tokens expire after a
+few hours, re-run `aws sso login --profile twiner-admin` when a command starts
 failing with a token-expired error.
 
 ## 4. Pick a region
@@ -112,7 +112,7 @@ Then, one-time per account+region:
 
 ```
 cd infra
-cdk bootstrap aws://<ACCOUNT_ID>/<REGION> --profile twin-r-admin
+cdk bootstrap aws://<ACCOUNT_ID>/<REGION> --profile twiner-admin
 ```
 
 (`<ACCOUNT_ID>` from `aws sts get-caller-identity`.) This creates the
@@ -123,7 +123,7 @@ cost, not part of the app's own stack.
 
 ```
 cd infra
-cdk deploy --profile twin-r-admin
+cdk deploy --profile twiner-admin
 ```
 
 This builds the scenario Docker image locally (needs Docker running —
@@ -139,38 +139,38 @@ Build the cloud-ready buildings file first (see ADR-0016 for why this is
 separate from the local `parts/*.buildings.parquet` glob):
 
 ```
-uv run --package twin-r-exposure python -m exposure.compact_cloud_cli \
+uv run --package twiner-exposure python -m exposure.compact_cloud_cli \
     data/exposure/parts data/exposure/buildings-cloud.parquet
 ```
 
 Then upload everything the Lambda's env vars point at (see
-`infra/stacks/twin_r_stack.py`'s `environment={...}` for the exact keys):
+`infra/stacks/twiner_stack.py`'s `environment={...}` for the exact keys):
 
 ```
 aws s3 cp data/exposure/buildings-cloud.parquet \
-    s3://<DataBucketName>/exposure/buildings-cloud.parquet --profile twin-r-admin
+    s3://<DataBucketName>/exposure/buildings-cloud.parquet --profile twiner-admin
 aws s3 cp data/exposure/exposure.parquet \
-    s3://<DataBucketName>/exposure/exposure.parquet --profile twin-r-admin
+    s3://<DataBucketName>/exposure/exposure.parquet --profile twiner-admin
 aws s3 cp data/fragility/fragility.parquet \
-    s3://<DataBucketName>/fragility/fragility.parquet --profile twin-r-admin
+    s3://<DataBucketName>/fragility/fragility.parquet --profile twiner-admin
 aws s3 cp data/faults/qafi_faults.parquet \
-    s3://<DataBucketName>/faults/qafi_faults.parquet --profile twin-r-admin
+    s3://<DataBucketName>/faults/qafi_faults.parquet --profile twiner-admin
 aws s3 cp data/exposure/municipalities.parquet \
-    s3://<DataBucketName>/exposure/municipalities.parquet --profile twin-r-admin
+    s3://<DataBucketName>/exposure/municipalities.parquet --profile twiner-admin
 
 # PMTiles the frontend fetches directly, EXCEPT buildings.pmtiles below,
 # which the tiles Lambda (services/tiles) also range-reads server-side for
 # the per-scenario tile-join endpoint -- its key must match
-# TWIN_R_BUILDINGS_PMTILES_KEY (infra/stacks/twin_r_stack.py; defaults to
+# TWINER_BUILDINGS_PMTILES_KEY (infra/stacks/twiner_stack.py; defaults to
 # this exact path, "tiles/buildings.pmtiles", so no override needed if you
 # don't move it). debris.pmtiles/municipalities.pmtiles can go anywhere
 # convenient; match whatever you set VITE_*_PMTILES_URL to.
 aws s3 cp data/exposure/buildings.pmtiles \
-    s3://<DataBucketName>/tiles/buildings.pmtiles --profile twin-r-admin
+    s3://<DataBucketName>/tiles/buildings.pmtiles --profile twiner-admin
 aws s3 cp data/exposure/debris.pmtiles \
-    s3://<DataBucketName>/tiles/debris.pmtiles --profile twin-r-admin
+    s3://<DataBucketName>/tiles/debris.pmtiles --profile twiner-admin
 aws s3 cp data/exposure/municipalities.pmtiles \
-    s3://<DataBucketName>/tiles/municipalities.pmtiles --profile twin-r-admin
+    s3://<DataBucketName>/tiles/municipalities.pmtiles --profile twiner-admin
 ```
 
 ## 9. Smoke-test

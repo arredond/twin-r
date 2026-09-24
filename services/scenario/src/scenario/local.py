@@ -5,7 +5,7 @@ Runs the same domain logic (engine.run_scenario) as the Lambda handler
 "local ↔ cloud parity" adapter split from docs/decisions/0001-compute-and-iac.md
 -- only this file and handler.py know about their respective runtimes.
 
-Run with: uv run --package twin-r-scenario uvicorn scenario.local:app --reload
+Run with: uv run --package twiner-scenario uvicorn scenario.local:app --reload
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from .results_store import (
 from .rupture import Rupture, from_fault, from_manual_input
 from .tile_join import join_tile, warm_cache
 
-app = FastAPI(title="twin-r scenario function (local)")
+app = FastAPI(title="twiner scenario function (local)")
 
 # join_tile does real CPU work per call (MVT decode + re-encode --
 # mapbox_vector_tile.encode alone measured ~0.4s for a mid-size tile, pure
@@ -66,7 +66,7 @@ app.add_middleware(
 # aren't touched.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
-DATA_DIR = os.environ.get("TWIN_R_DATA_DIR", "data")
+DATA_DIR = os.environ.get("TWINER_DATA_DIR", "data")
 # Individually overridable (mirrors handler.py) -- needed once
 # buildings.parquet is a partitioned glob rather than a single file
 # (ADR-0005), which doesn't fit the single-DATA_DIR convention. `data/
@@ -77,16 +77,16 @@ DATA_DIR = os.environ.get("TWIN_R_DATA_DIR", "data")
 # exposure.parquet *does* have a single combined file
 # (`region.combine_exposure`), regenerated whenever the crawl changes.
 BUILDINGS_PATH = os.environ.get(
-    "TWIN_R_BUILDINGS_PATH", f"{DATA_DIR}/exposure/parts/*.buildings.parquet"
+    "TWINER_BUILDINGS_PATH", f"{DATA_DIR}/exposure/parts/*.buildings.parquet"
 )
-EXPOSURE_PATH = os.environ.get("TWIN_R_EXPOSURE_PATH", f"{DATA_DIR}/exposure/exposure.parquet")
-FRAGILITY_PATH = os.environ.get("TWIN_R_FRAGILITY_PATH", f"{DATA_DIR}/fragility/fragility.parquet")
-FAULTS_PATH = os.environ.get("TWIN_R_FAULTS_PATH", f"{DATA_DIR}/faults/qafi_faults.parquet")
+EXPOSURE_PATH = os.environ.get("TWINER_EXPOSURE_PATH", f"{DATA_DIR}/exposure/exposure.parquet")
+FRAGILITY_PATH = os.environ.get("TWINER_FRAGILITY_PATH", f"{DATA_DIR}/fragility/fragility.parquet")
+FAULTS_PATH = os.environ.get("TWINER_FAULTS_PATH", f"{DATA_DIR}/faults/qafi_faults.parquet")
 # The same static buildings.pmtiles the frontend already loads directly
 # (apps/web's VITE_BUILDINGS_PMTILES_URL) -- tile_join.py reads individual
 # tiles from it and joins in a scenario's results, never re-tiling.
 BUILDINGS_PMTILES_PATH = os.environ.get(
-    "TWIN_R_BUILDINGS_PMTILES_PATH", f"{DATA_DIR}/exposure/buildings.pmtiles"
+    "TWINER_BUILDINGS_PMTILES_PATH", f"{DATA_DIR}/exposure/buildings.pmtiles"
 )
 
 # Default reference point when a caller doesn't specify one -- Madrid, as

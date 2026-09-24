@@ -4,7 +4,7 @@
 # depends on openquake.hazardlib (pulls in numpy/scipy/numba/...), well over
 # the 250MB unzipped zip-Lambda limit. A container image has no such limit.
 #
-# Built with the *repo root* as context (infra/stacks/twin_r_stack.py's
+# Built with the *repo root* as context (infra/stacks/twiner_stack.py's
 # `DockerImageCode.from_image_asset(str(REPO_ROOT), file="services/scenario/
 # Dockerfile")`), not services/scenario/ alone -- this also needs
 # services/tiles (results_store.py, imported by handler.py's compute path

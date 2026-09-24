@@ -1,10 +1,10 @@
 # Generated from services/tiles/pyproject.toml via uv -- regenerate after
 # changing that file's dependencies with:
-#   cd /path/to/repo && uv export --quiet --package twin-r-tiles --no-dev \
+#   cd /path/to/repo && uv export --quiet --package twiner-tiles --no-dev \
 #     --no-editable --no-hashes --no-header --no-annotate --no-emit-project \
 #     > services/tiles/src/requirements.txt
 # Must live at this exact path (the Lambda's PythonFunction `entry`,
-# infra/stacks/twin_r_stack.py) -- aws-cdk.aws-lambda-python-alpha's
+# infra/stacks/twiner_stack.py) -- aws-cdk.aws-lambda-python-alpha's
 # bundling looks for a requirements.txt right next to the handler code, not
 # up at services/tiles/'s own pyproject.toml (a src-layout package, so the
 # two aren't the same directory). --no-hashes: the bundling container

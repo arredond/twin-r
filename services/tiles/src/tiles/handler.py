@@ -38,11 +38,11 @@ from .results_store import read_building_results
 from .s3_pmtiles import s3_source
 from .tile_join import join_tile_bytes
 
-DATA_BUCKET = os.environ["TWIN_R_DATA_BUCKET"]
+DATA_BUCKET = os.environ["TWINER_DATA_BUCKET"]
 # Matches docs/deploy-aws-setup.md's own upload target
 # (`aws s3 cp data/exposure/buildings.pmtiles s3://<DataBucketName>/tiles/buildings.pmtiles`).
-BUILDINGS_PMTILES_KEY = os.environ.get("TWIN_R_BUILDINGS_PMTILES_KEY", "tiles/buildings.pmtiles")
-RESULTS_BUCKET = os.environ["TWIN_R_RESULTS_BUCKET"]
+BUILDINGS_PMTILES_KEY = os.environ.get("TWINER_BUILDINGS_PMTILES_KEY", "tiles/buildings.pmtiles")
+RESULTS_BUCKET = os.environ["TWINER_RESULTS_BUCKET"]
 
 _ROUTE_RE = re.compile(r"^/tiles/(?P<scenario_id>[^/]+)/(?P<z>\d+)/(?P<x>\d+)/(?P<y>\d+)\.mvt$")
 

@@ -12,7 +12,7 @@ import {
   type ScenarioResult,
 } from "./scenarioApi";
 
-// twin-r milestone-1 MVP shell: source panel -> run -> damage layer,
+// twiner milestone-1 MVP shell: source panel -> run -> damage layer,
 // matching MERISUR's own UX shape (docs/merisur.md §5). The
 // probability-level selector (docs/merisur.md §4.7) landed per
 // docs/validation-lorca-2011.md §10.5.
@@ -158,7 +158,7 @@ export default function App() {
         }}
       >
         <div>
-          <h1 style={{ fontSize: "1.1rem" }}>twin-r</h1>
+          <h1 style={{ fontSize: "1.1rem" }}>twiner</h1>
           <p style={{ fontSize: "0.85rem", color: "#666" }}>
             Seismic scenario simulator — Spain
           </p>

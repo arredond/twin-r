@@ -43,11 +43,11 @@ from .rupture import Rupture, from_fault, from_manual_input
 
 # buildings.parquet is a partitioned glob, not a single combined file --
 # see local.py's own comment on this same pair of defaults for why.
-BUILDINGS_PATH = os.environ.get("TWIN_R_BUILDINGS_PATH", "data/exposure/parts/*.buildings.parquet")
-EXPOSURE_PATH = os.environ.get("TWIN_R_EXPOSURE_PATH", "data/exposure/exposure.parquet")
-FRAGILITY_PATH = os.environ.get("TWIN_R_FRAGILITY_PATH", "data/fragility/fragility.parquet")
-FAULTS_PATH = os.environ.get("TWIN_R_FAULTS_PATH", "data/faults/qafi_faults.parquet")
-RESULTS_BUCKET = os.environ.get("TWIN_R_RESULTS_BUCKET")  # unset -> return inline
+BUILDINGS_PATH = os.environ.get("TWINER_BUILDINGS_PATH", "data/exposure/parts/*.buildings.parquet")
+EXPOSURE_PATH = os.environ.get("TWINER_EXPOSURE_PATH", "data/exposure/exposure.parquet")
+FRAGILITY_PATH = os.environ.get("TWINER_FRAGILITY_PATH", "data/fragility/fragility.parquet")
+FAULTS_PATH = os.environ.get("TWINER_FAULTS_PATH", "data/faults/qafi_faults.parquet")
+RESULTS_BUCKET = os.environ.get("TWINER_RESULTS_BUCKET")  # unset -> return inline
 
 # Default reference point when a fault-mode request doesn't include
 # near_lat/near_lon -- see local.py's DEFAULT_LAT/DEFAULT_LON.

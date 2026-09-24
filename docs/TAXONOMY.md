@@ -1,14 +1,14 @@
 # Building typology / vulnerability class taxonomy
 
 Status: current as of [ADR-0012](./decisions/0012-im-type-dispatch-and-vernacular-masonry-taxonomy.md).
-Reference doc, not a plan or a decision record — explains what `twin-r`
+Reference doc, not a plan or a decision record — explains what `twiner`
 actually assigns each building today, what MERISUR does instead, where the
 two diverge, and what would need to change to close that gap further.
 Background: [`merisur.md`](./merisur.md) §4.5 (vulnerability/typology in
 general) and [`validation-lorca-2011.md`](./validation-lorca-2011.md) §10
 (the concrete gap this heuristic caused, and the fix ADR-0012 shipped).
 
-## 1. What `twin-r` does today
+## 1. What `twiner` does today
 
 `pipelines/exposure/src/exposure/taxonomy.py`'s `assign_taxonomy` maps two
 Catastro attributes — `construction_year` and `floors` — to a
@@ -55,7 +55,7 @@ same "nearest available height" handling every class already gets
 pre-published fragility curve from Martins & Silva (2020)'s global
 GEM-taxonomy fragility/vulnerability model (`pipelines/fragility`) — not a
 Lorca-specific capacity curve (no public one exists, see §2 below), and not
-computed by `twin-r` itself. This is a deliberate substitute for MERISUR's
+computed by `twiner` itself. This is a deliberate substitute for MERISUR's
 own method (IDCM/FEMA 440 against a real capacity curve per class,
 `merisur.md` §4.6), documented as a simplification in
 `docs/milestone-1-plan.md` §2.
@@ -67,7 +67,7 @@ Per `merisur.md` §4.5, MERISUR's vulnerability classification draws on
 
 1. **Empirical/EMS-98 classification** from field campaigns — structural
    system, soft-storey, height irregularities, position within block, etc.
-   `twin-r` cannot reproduce this at all (no fieldwork, by project
+   `twiner` cannot reproduce this at all (no fieldwork, by project
    constraint).
 2. **Mechanical models**: representative finite-element models per
    building class, pushover analysis → capacity curves → fragility curves.
@@ -79,7 +79,7 @@ Per `merisur.md` §4.5, MERISUR's vulnerability classification draws on
 3. **Remote-sensing + ML classification**: LiDAR + orthophoto + satellite
    features classified via Decision Trees / SVM / Logistic Regression /
    Bayesian Networks, ~77–80% accuracy/F1 in Lorca trials — this is *how*
-   MERISUR assigned classes at scale, not something `twin-r` currently has
+   MERISUR assigned classes at scale, not something `twiner` currently has
    the inputs or scope to reproduce (would need LiDAR/orthophoto coverage
    and a trained classifier, not just Catastro attributes).
 
@@ -93,12 +93,12 @@ against — see §4 and `questions-for-upm.md` §4 (extended per this doc).
 **No public Lorca building/vulnerability dataset exists** (`merisur.md`
 §4.4/§7): we checked Archivo Digital UPM, Zenodo, and UPM's GIIS group page
 directly. There is no MERISUR exposure data to bootstrap from, for Lorca or
-anywhere else — `twin-r`'s from-Catastro heuristic isn't a shortcut taken
+anywhere else — `twiner`'s from-Catastro heuristic isn't a shortcut taken
 instead of using MERISUR's own data; it's the only option available to us.
 
 ## 3. How the two compare
 
-| | MERISUR | `twin-r` |
+| | MERISUR | `twiner` |
 |---|---|---|
 | Classification basis | Field survey + remote-sensing ML (77–80% accuracy) | Two Catastro attributes (construction year, floors) |
 | Number of classes (Lorca) | 6 Risk-UE MBTs (1 RC, 5 masonry) | 3 (1 RC, 2 masonry) |
@@ -111,7 +111,7 @@ The biggest structural mismatch: MERISUR's five Lorca masonry MBTs almost
 certainly capture real, materially different vulnerability differences
 (adobe vs. rubble stone vs. dressed stone vs. confined masonry pre/post the
 1999 Spanish masonry code, going by the sibling classes Martins & Silva
-publish — see §4) that `twin-r`'s two-way masonry split collapses into a
+publish — see §4) that `twiner`'s two-way masonry split collapses into a
 single boundary. `MUR-STRUB_LWAL-DNO` (rubble stone) was chosen as the
 pre-1940 default because Lorca's historic old town is documented as
 predominantly stone masonry, not adobe (`merisur.md` §4.5,

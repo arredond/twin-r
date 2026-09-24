@@ -1,7 +1,7 @@
 [project]
-name = "twin-r-faults"
+name = "twiner-faults"
 version = "0.1.0"
-description = "twin-r pipeline: QAFI active faults -> faults.parquet"
+description = "twiner pipeline: QAFI active faults -> faults.parquet"
 requires-python = ">=3.12"
 dependencies = [
     "requests>=2.32",

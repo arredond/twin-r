@@ -1,7 +1,7 @@
 [project]
-name = "twin-r-fragility"
+name = "twiner-fragility"
 version = "0.1.0"
-description = "twin-r pipeline: Martins & Silva (2020) fragility functions -> fragility.parquet"
+description = "twiner pipeline: Martins & Silva (2020) fragility functions -> fragility.parquet"
 requires-python = ">=3.12"
 dependencies = [
     "requests>=2.32",

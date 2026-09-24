@@ -1,7 +1,7 @@
 [project]
-name = "twin-r-infra"
+name = "twiner-infra"
 version = "0.1.0"
-description = "twin-r AWS CDK app (S3 data/results buckets, scenario Lambda) -- see docs/decisions/0001-compute-and-iac.md"
+description = "twiner AWS CDK app (S3 data/results buckets, scenario Lambda) -- see docs/decisions/0001-compute-and-iac.md"
 requires-python = ">=3.12"
 dependencies = [
     "aws-cdk-aws-lambda-python-alpha==2.269.0a0",

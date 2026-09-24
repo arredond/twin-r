@@ -69,7 +69,7 @@ already committed to static files over S3 as the storage model.
   header byte directly (PMTiles stores `maxZoom`/`centerZoom` as raw
   `uint8`s at fixed offsets — no retile needed for a metadata-only bug)
   and by setting `zoomLevelsToOverscale` generously on the `Map`
-  constructor — see `[[twin-r-buildings-pmtiles-maxzoom-overscale]]` (the
+  constructor — see `[[twiner-buildings-pmtiles-maxzoom-overscale]]` (the
   session memory has the full mechanism and byte offsets). The same
   investigation also surfaced that `buildings.pmtiles` currently reports
   ~4.9x the expected national building count and has been through more

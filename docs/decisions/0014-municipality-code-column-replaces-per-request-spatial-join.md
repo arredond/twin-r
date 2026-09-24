@@ -61,7 +61,7 @@ via the pipeline instead.
   everywhere -- any future consumer should expect it present, same as
   ADR-0006's spatial-index columns.
 - `compute_municipality_stats`'s signature dropped `municipalities_path`
-  -- `local.py`/`handler.py` no longer need `TWIN_R_MUNICIPALITIES_PATH`
+  -- `local.py`/`handler.py` no longer need `TWINER_MUNICIPALITIES_PATH`
   for this endpoint. `municipalities.parquet` is still used elsewhere
   (the choropleth's boundary geometry itself, served as
   `municipalities.pmtiles`), just not on the scenario request path.

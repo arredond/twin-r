@@ -14,10 +14,10 @@ earthquake size:
 | Low probability / high impact | median + 1σ | modal damage state |
 | Very low probability / very high impact | median + 1σ | 85th-percentile damage state |
 
-`twin-r`'s milestone-1 plan deliberately deferred this ("skip MERISUR's
+`twiner`'s milestone-1 plan deliberately deferred this ("skip MERISUR's
 three probability levels ... add them once the base chain works",
 `docs/milestone-1-plan.md` §1/§8) and computed only the median-ground-motion,
-modal-damage case. Every scenario `twin-r` had ever run — including the
+modal-damage case. Every scenario `twiner` had ever run — including the
 entire Lorca 2011 validation exercise (`docs/validation-lorca-2011.md`) —
 was implicitly "High probability" only, with no way to ask for anything
 else.

@@ -13,7 +13,7 @@ from scratch" below before touching `compute_debris_region` or
 
 ## Context
 
-Debris is the last documented MERISUR component `twin-r` doesn't have
+Debris is the last documented MERISUR component `twiner` doesn't have
 (`docs/milestone-1-plan.md` §1/§8: "Damage only, no debris... a
 milestone-1.x follow-up"). The only debris methodology we have in enough
 detail to implement is the 2018-tool table (`docs/merisur.md` §4.8):

@@ -29,7 +29,7 @@ bounding box of (-18.15°, 27.64°) to (4.31°, 43.79°) — mainland Spain, the
 Balearics, and the Canary Islands (28°N), matching `SPAIN_PROVINCES`
 including provinces 35/38.
 
-`bin/twinr` and `apps/web/public/data/buildings.pmtiles` now point at this
+`bin/twiner` and `apps/web/public/data/buildings.pmtiles` now point at this
 dataset (were `exposure_region`/the 352MB regional file).
 
 ## 2. Iberia-wide manual-mode sanity check: 8 cities, Mw 6.5

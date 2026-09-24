@@ -1,7 +1,7 @@
 [project]
-name = "twin-r-scenario"
+name = "twiner-scenario"
 version = "0.1.0"
-description = "twin-r scenario function: rupture -> GMPE -> damage, runnable as a Lambda or locally"
+description = "twiner scenario function: rupture -> GMPE -> damage, runnable as a Lambda or locally"
 requires-python = ">=3.12"
 dependencies = [
     "duckdb>=1.1",
@@ -24,11 +24,11 @@ dependencies = [
     # a direct dependency here: nothing in this package imports it now that
     # the join moved into `tiles.tile_join`, only pmtiles.reader for the
     # local mmap'd file.
-    "twin-r-tiles",
+    "twiner-tiles",
 ]
 
 [tool.uv.sources]
-twin-r-tiles = { workspace = true }
+twiner-tiles = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

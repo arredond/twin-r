@@ -5,7 +5,7 @@ Status: accepted
 ## Context
 
 ADR-0001 already picked Lambda + CDK for the scenario function and sketched
-a stack (`infra/stacks/twin_r_stack.py`) -- data bucket, results bucket, one
+a stack (`infra/stacks/twiner_stack.py`) -- data bucket, results bucket, one
 container-image Lambda behind a Function URL -- but it was explicitly
 "not yet `cdk synth`-tested against a real AWS account". Getting this ready
 to actually deploy raised a few concrete questions:

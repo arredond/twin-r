@@ -91,7 +91,7 @@ loading), a magnitude-derived search radius instead of a flat 300km, and
 non-"None" filtering in the response (with the frontend's fallback tile
 color now representing "None" — §6 below has the re-measured numbers).
 Not done: a results-to-file/URL path for the local dev server (`handler.py`'s
-Lambda path already supports this via `TWIN_R_RESULTS_BUCKET`), and a
+Lambda path already supports this via `TWINER_RESULTS_BUCKET`), and a
 binary/columnar response format — both still valid future options if a
 payload ever needs to shrink further than filtering alone achieves.
 

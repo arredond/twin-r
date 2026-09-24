@@ -1,4 +1,4 @@
-"""twin-r tile-join function: base PMTiles tile + a scenario's thin
+"""twiner tile-join function: base PMTiles tile + a scenario's thin
 results -> a joined MVT tile.
 
 `handler.py` (Lambda) is the only place here that imports AWS/Lambda

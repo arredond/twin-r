@@ -2,8 +2,8 @@
 
 Three independent ETL pipelines that turn public data sources into the
 static parquet/PMTiles files `services/scenario` reads at request time. Each
-is its own `uv` workspace package (`twin-r-faults`, `twin-r-exposure`,
-`twin-r-fragility`) but they share one convention: fetch from a real public
+is its own `uv` workspace package (`twiner-faults`, `twiner-exposure`,
+`twiner-fragility`) but they share one convention: fetch from a real public
 source, write parquet (+ PMTiles for buildings), no database, no server —
 see [`../docs/milestone-1-plan.md`](../docs/milestone-1-plan.md) §3 for why.
 
@@ -117,7 +117,7 @@ uv run python -m exposure.municipalities_cli data/exposure/muni_raw data/exposur
 Two outputs: `municipalities.pmtiles` (the frontend's low-zoom choropleth
 layer) and `municipalities.parquet`, a GeoParquet `services/scenario`
 spatially joins scenario results against server-side
-(`TWIN_R_MUNICIPALITIES_PATH`) to compute per-municipality aggregate
+(`TWINER_MUNICIPALITIES_PATH`) to compute per-municipality aggregate
 stats -- see ADR-0013 for why that join is DuckDB spatial rather than a
 new geopandas/shapely dependency on the scenario service.
 
@@ -148,8 +148,8 @@ re-running for a bigger area.
 `services/scenario` (see its own package for the request-handling side)
 reads all five outputs -- `buildings.parquet`, `exposure.parquet`,
 `fragility.parquet`, `faults.parquet`, `municipalities.parquet` -- via
-configurable paths (`TWIN_R_BUILDINGS_PATH` etc., see
+configurable paths (`TWINER_BUILDINGS_PATH` etc., see
 `scenario/local.py`/`handler.py`), so
 switching between the Lorca, Murcia+Andalucía, or national dataset is an
-environment-variable change, not a code change. `bin/twinr` (repo root)
+environment-variable change, not a code change. `bin/twiner` (repo root)
 starts the local dev stack against whichever dataset its env vars point at.

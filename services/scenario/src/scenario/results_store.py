@@ -46,7 +46,7 @@ from pathlib import Path
 
 import pandas as pd
 
-RESULTS_DIR = Path(os.environ.get("TWIN_R_RESULTS_DIR", "results"))
+RESULTS_DIR = Path(os.environ.get("TWINER_RESULTS_DIR", "results"))
 
 
 def scenario_dir(scenario_id: str) -> Path:

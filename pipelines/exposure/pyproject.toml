@@ -1,7 +1,7 @@
 [project]
-name = "twin-r-exposure"
+name = "twiner-exposure"
 version = "0.1.0"
-description = "twin-r pipeline: Catastro buildings -> exposure.parquet + PMTiles"
+description = "twiner pipeline: Catastro buildings -> exposure.parquet + PMTiles"
 requires-python = ">=3.12"
 dependencies = [
     "requests>=2.32",

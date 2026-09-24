@@ -106,7 +106,7 @@ responsible ("Alhama de Murcia (1/4)"). Our pipeline originally computed
 **7.38** for the same-named fault — traced to a bad data source, not a
 formula bug:
 
-- `twin-r`'s faults pipeline originally queried IGME's public ArcGIS
+- `twiner`'s faults pipeline originally queried IGME's public ArcGIS
   MapServer REST layer, which only exposes 8 basic fields (no length, no
   Mmax) and whose *geometry* for "Alhama de Murcia (1/4)" turned out to be
   **~96 km — over 3x** the fault's official length.
@@ -117,7 +117,7 @@ formula bug:
   published**, not something we need to estimate at all for this fault.
   60% of QAFI's 201 faults have a similarly published Mmax.
 
-`twin-r` now sources faults from the official shapefile
+`twiner` now sources faults from the official shapefile
 ([ADR-0004](./decisions/0004-qafi-shapefile-source.md)), uses the published
 Mmax where available, and only falls back to a length-based estimate (on
 the correct official `Length` field) for the remainder. Full trace of this
@@ -401,7 +401,7 @@ two things that changes between them, not just damage percentile:
 | Low probability / high impact | median + 1σ | modal damage state |
 | Very low probability / very high impact | median + 1σ | 85th-percentile damage state |
 
-`twin-r` implements none of this — `ground_motion.py` always computes the
+`twiner` implements none of this — `ground_motion.py` always computes the
 GMPE's bare median (`np.exp(mean[0])`, `compute_sa03`/`compute_sa03_gridded`
 in `ground_motion.py`), there's no `sigma`/percentile parameter anywhere in
 `rupture.py`, `engine.py`, `handler.py`, or `local.py`, and the CLI used for
@@ -445,7 +445,7 @@ around:
 
 Going from "0 buildings modally damaged" to "2,696 modally Slight" is a
 qualitative change, not a tweak — and it comes from a UI feature MERISUR
-already ships and documents, using a GMPE output twin-r's own code already
+already ships and documents, using a GMPE output twiner's own code already
 computes and discards. This doesn't fully close the gap against the
 6,416-inspected figure (§1's caveat about inspection targeting reported
 damage, not a census, still applies — these numbers are not directly
@@ -472,12 +472,12 @@ vendoring, no taxonomy judgment calls, no blocked-on-UPM data dependency.
    to, this one; the full 3×3 (taxonomy × IM-fix × probability-tier) grid
    this item originally asked for still needs 1–2 landed first.
 
-## 11. Live MERISUR-vs-twin-r comparison at matching "high probability", and two follow-up sanity checks
+## 11. Live MERISUR-vs-twiner comparison at matching "high probability", and two follow-up sanity checks
 
 With ADR-0015's site amplification shipped and backfilled (§10.7), the
-user ran both MERISUR's live tool and twin-r side by side on the same
+user ran both MERISUR's live tool and twiner side by side on the same
 fault ("Alhama de Murcia (1/4)", max magnitude, automatic mode) at
-matching "high probability" tier. Result: twin-r moved from all-green to
+matching "high probability" tier. Result: twiner moved from all-green to
 a green/yellow (None/Slight) mix — real progress — but MERISUR's own
 output is still mostly **Moderate**, with some Extensive and a few
 Complete. A substantial gap remains. Two sanity checks (literature only,
@@ -529,7 +529,7 @@ Index Method** behaviour modifiers, derived by fitting against Lorca's own
 The category difference matters more than any specific number: RISK-UE
 LM1 is a **semi-empirical macroseismic method** — a Vulnerability Index
 per building type calibrated directly against real EMS-98 damage
-statistics from Mediterranean/Italian masonry earthquakes. `twin-r`'s
+statistics from Mediterranean/Italian masonry earthquakes. `twiner`'s
 Martins & Silva (2020) substitute (§4's root cause, still in use even
 after ADR-0012's vernacular-masonry fix) is a **globally-averaged
 analytical model** — nonlinear time-history analysis of representative

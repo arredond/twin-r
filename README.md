@@ -1,4 +1,4 @@
-# twin-r
+# twiner
 
 A digital twin for multi-hazard risk assessment in Spain, starting with
 seismic risk. Milestone 1 built a modern clone of UPM's
@@ -28,7 +28,7 @@ pipelines/           Three ETL pipelines (faults, exposure, fragility) --
                      see pipelines/README.md for how each works
 infra/               AWS CDK app (S3 buckets + scenario Lambda)
 docs/                Research notes, plans, and architecture decisions
-bin/twinr            Start/stop/restart the local dev stack (see below)
+bin/twiner            Start/stop/restart the local dev stack (see below)
 ```
 
 Python packages are a `uv` workspace (one `.venv` for everything under
@@ -72,14 +72,14 @@ cp data/exposure/municipalities.pmtiles apps/web/public/data/municipalities.pmti
 
 # 3. Start both the scenario API and the frontend together
 npm install --prefix apps/web
-./bin/twinr start   # see `twinr status`/`twinr attach`/`twinr stop`/`twinr restart`
+./bin/twiner start   # see `twiner status`/`twiner attach`/`twiner stop`/`twiner restart`
 ```
 
 Open http://localhost:5173, submit a manual rupture or pick a fault in the
 sidebar, and the map colors buildings by resulting damage state.
-`bin/twinr` defaults to whichever dataset `TWIN_R_BUILDINGS_PATH`/
-`TWIN_R_EXPOSURE_PATH` point at (see the script's own comments) -- set
-those env vars before `twinr start` to point at a different one, e.g. a
+`bin/twiner` defaults to whichever dataset `TWINER_BUILDINGS_PATH`/
+`TWINER_EXPOSURE_PATH` point at (see the script's own comments) -- set
+those env vars before `twiner start` to point at a different one, e.g. a
 single-municipality test crawl (`uv run python -m exposure <raw_dir>
 <buildings.parquet> <exposure.parquet> <buildings.pmtiles>`, pointed at a
 directory other than `data/exposure` so it doesn't collide with the full

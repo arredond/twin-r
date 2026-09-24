@@ -6,7 +6,7 @@ Status: accepted
 
 `docs/validation-lorca-2011.md` traced why re-running the real 2011 Lorca
 earthquake (and, separately, an automatic-mode max-magnitude "high
-probability" scenario on the causative fault) through `twin-r` predicts
+probability" scenario on the causative fault) through `twiner` predicts
 essentially no damage, while MERISUR's own tool and the real event show
 widespread Slight/Moderate damage in Lorca's old town. Several
 contributing factors were found and mostly fixed (ADR-0007's finite
@@ -20,11 +20,11 @@ identical site amplification (none)."
 This isn't cosmetic. Lorca's historic centre sits on a sedimentary basin
 with documented soft-soil amplification (Navarro et al. 2014's 5-class
 microzonation, `docs/merisur.md` §4.3) — precisely the area that actually
-took damage in 2011. `twin-r`'s flat-rock assumption suppresses ground
+took damage in 2011. `twiner`'s flat-rock assumption suppresses ground
 motion exactly where MERISUR's Lorca-specific microzonation amplifies it.
 
 MERISUR's own microzonation is Lorca-only, not public, and explicitly not
-portable (`docs/questions-for-upm.md` #2, still open) — `twin-r`'s scope is
+portable (`docs/questions-for-upm.md` #2, still open) — `twiner`'s scope is
 the whole of Spain, so reusing it even if UPM shares it would only fix
 Lorca, not the underlying gap.
 
@@ -58,12 +58,12 @@ EFEHR / SED-ETH Zürich). Verified directly:
   seismic risk calculations use as GMPE input (the ESRM20 repository ships
   it as an OpenQuake NRML site-model file per country, alongside the
   exposure/vulnerability/hazard inputs for the same 44-country model) — so
-  adopting it keeps `twin-r` consistent with how the rest of Europe already
+  adopting it keeps `twiner` consistent with how the rest of Europe already
   runs Akkar-family GMPEs with site effects, rather than inventing a
   second, bespoke amplification scheme.
 - **Verified directly against Lorca**: nearest-neighbor lookup at Lorca's
   town centre (37.6714, -1.6997) returns **Vs30 ≈ 383 m/s** (EC8 class D,
-  soft soil) vs. the flat `DEFAULT_VS30 = 800` (class A/B, rock) `twin-r`
+  soft soil) vs. the flat `DEFAULT_VS30 = 800` (class A/B, rock) `twiner`
   uses today. Feeding both into the existing Akkar et al. (2014) GMPE for
   the real 2011 rupture (Mw 5.2, strike 240°, dip 54°, rake 44°, Ztor 2km):
   **SA(0.3s) goes from 0.191g (flat rock) to 0.297g (real Vs30) — a ~55%

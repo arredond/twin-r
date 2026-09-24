@@ -9,7 +9,7 @@ continuing to work around them with public-data substitutes.
 
 Each question notes *why* we're asking (what we found, what gap it fills)
 and *what we'd do with an answer*, so it's clear these aren't idle curiosity
-— each one unblocks or meaningfully improves a specific part of `twin-r`.
+— each one unblocks or meaningfully improves a specific part of `twiner`.
 
 *A question about QAFI's Alhama de Murcia Mmax (6.9 vs. our initial 7.4)
 originally lived here — resolved ourselves by downloading and inspecting
@@ -30,9 +30,9 @@ damaged — traced to this substitution, not a bug (full writeup in
 `validation-lorca-2011.md`).
 
 **Update, sharper after ADR-0015 (site amplification) and a live
-MERISUR-vs-twin-r comparison at matching "high probability" tier:** with
+MERISUR-vs-twiner comparison at matching "high probability" tier:** with
 real per-building Vs30 now wired in (see question 2's update below),
-twin-r moved from all-green to a green/yellow (None/Slight) mix — but
+twiner moved from all-green to a green/yellow (None/Slight) mix — but
 MERISUR's own output for the same fault/tier is mostly **Moderate**, with
 some Extensive and a few Complete. Site amplification checks out as
 roughly correct (see question 2), which points the remaining gap squarely
@@ -73,7 +73,7 @@ curves in (a).
 fragility functions with the real Lorca-specific ones (or, if (b) applies,
 implement the RISK-UE LM1 method itself as an alternative damage model
 path), closing the gap both the original 2011 validation run and this
-newer MERISUR-vs-twin-r comparison surfaced.
+newer MERISUR-vs-twiner comparison surfaced.
 
 ### 2. Lorca soil microzonation data (Navarro et al. 2014)
 
@@ -241,7 +241,7 @@ tool's network behavior.
 Has UPM (or collaborators) already started any national-scale extension of
 MERISUR's methodology, exposure modeling, or hazard work beyond Lorca? We'd
 rather build on or coordinate with existing work than duplicate it — this
-is directly relevant to `twin-r`'s milestone 2 (whole-of-Spain expansion,
+is directly relevant to `twiner`'s milestone 2 (whole-of-Spain expansion,
 currently underway for Murcia + Andalucía).
 
 ### 8. Validation cases beyond Lorca

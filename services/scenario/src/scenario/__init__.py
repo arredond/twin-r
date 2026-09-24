@@ -1,4 +1,4 @@
-"""twin-r scenario function: rupture -> ground motion -> damage.
+"""twiner scenario function: rupture -> ground motion -> damage.
 
 Domain logic only in this package -- no AWS/Lambda-specific code here (see
 docs/decisions/0001-compute-and-iac.md). `handler.py` (Lambda) and
