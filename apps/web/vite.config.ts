@@ -12,4 +12,9 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['maplibre-gl'],
   },
+  // ES-module output for DamageMap.tsx's `?worker&url` maplibre worker
+  // import (the default, 'iife', can't hold the worker's own ESM imports).
+  worker: {
+    format: 'es',
+  },
 })

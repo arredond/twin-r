@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import type { GeoJSONSource, Map as MapLibreMap, MapLayerMouseEvent } from "maplibre-gl";
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import { Protocol } from "pmtiles";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -13,6 +14,19 @@ import {
   type Fault,
   type MunicipalityStats,
 } from "../scenarioApi";
+
+// MapLibre 6 locates its worker at runtime (`new URL("./maplibre-gl-worker.mjs",
+// import.meta.url)` built from a template string), which Vite's production
+// build can't see -- so the worker was never emitted into dist/assets, and
+// on Cloudflare Pages the request fell through to index.html ("non-JavaScript
+// MIME type"), leaving no tiles parsed at all. Dev never showed this since
+// maplibre-gl is excluded from pre-bundling (vite.config.ts) and served
+// straight from node_modules, worker file alongside it. `?worker&url` has
+// Vite bundle the worker *with* its own `./maplibre-gl-shared.mjs` import
+// into one emitted file (a plain `?url` would copy it alone and break that
+// import); vite.config.ts' `worker.format: "es"` keeps it a module worker,
+// which is how MapLibre starts any worker URL not ending in `.cjs`.
+maplibregl.setWorkerUrl(maplibreWorkerUrl);
 
 // All three PMTiles archives (buildings/debris/municipalities, below) live
 // under `tiles/` in the public data bucket (ADR-0016). Deployed builds set
@@ -1076,7 +1090,12 @@ export function DamageMap({
       );
     };
 
-    if (map.isSourceLoaded(DEBRIS_SOURCE_ID)) {
+    // getSource first: on mount this effect runs before the map's "load"
+    // handler has added the debris source, and isSourceLoaded on a missing
+    // source logs a "no tile manager with ID 'debris'" error event instead
+    // of just returning false -- the "sourcedata" fallback below already
+    // covers that case.
+    if (map.getSource(DEBRIS_SOURCE_ID) && map.isSourceLoaded(DEBRIS_SOURCE_ID)) {
       applyDebrisFeatureState();
     } else {
       map.once("sourcedata", applyDebrisFeatureState);
