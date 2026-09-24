@@ -1,7 +1,7 @@
 # Frontend deployment: Cloudflare Pages
 
 `apps/web` deploys as a static build to Cloudflare Pages, served at
-`https://twin-r.arredon.do`. See ADR-0016 for why (Pages caps individual
+`https://twiner.arredon.do`. See ADR-0016 for why (Pages caps individual
 assets at 25MB, so PMTiles/parquet aren't bundled into the deploy -- they're
 fetched at runtime from the public S3 data bucket the AWS side sets up,
 docs/deploy-aws-setup.md).
@@ -16,6 +16,9 @@ docs/deploy-aws-setup.md).
    - **Build output directory**: `dist`
    - **Framework preset**: Vite (if offered) or leave as "None" — the
      defaults above are enough, no Pages-specific config needed.
+   - Node version comes from `apps/web/.node-version` (pinned to 22, which
+     Vite 8 supports) rather than whatever the Pages build image defaults
+     to.
 3. Environment variables (Pages project → Settings → Environment
    variables), for **Production** (add matching **Preview** values too if
    you want preview deploys to hit the same backend):
@@ -34,17 +37,29 @@ docs/deploy-aws-setup.md).
 
    These match the `import.meta.env.VITE_*` reads already in
    `scenarioApi.ts`/`DamageMap.tsx` — no code change needed once they're
-   set.
-4. Deploy. Cloudflare builds and gives you a `*.pages.dev` URL first —
-   confirm the app actually loads and can hit the Lambda before wiring the
-   custom domain.
+   set. Current values for the deployed `TwinR-MVP` stack (`eu-south-2`;
+   re-check with `aws cloudformation describe-stacks --stack-name
+   TwinR-MVP --query 'Stacks[0].Outputs'` if the stack is ever recreated):
 
-## 2. Custom domain: `twin-r.arredon.do`
+   ```
+   VITE_SCENARIO_API_URL=https://naw44z44znff5je2ohuyyai7ce0gwpiu.lambda-url.eu-south-2.on.aws/
+   VITE_TILES_API_URL=https://y76dsobafxm4ibmxcoif5crxsy0dsysg.lambda-url.eu-south-2.on.aws/
+   VITE_BUILDINGS_PMTILES_URL=https://twinr-mvp-databuckete3889a50-qnfinvnljqx9.s3.eu-south-2.amazonaws.com/tiles/buildings.pmtiles
+   VITE_DEBRIS_PMTILES_URL=https://twinr-mvp-databuckete3889a50-qnfinvnljqx9.s3.eu-south-2.amazonaws.com/tiles/debris.pmtiles
+   VITE_MUNICIPALITIES_PMTILES_URL=https://twinr-mvp-databuckete3889a50-qnfinvnljqx9.s3.eu-south-2.amazonaws.com/tiles/municipalities.pmtiles
+   ```
+4. Deploy. Cloudflare builds and gives you a `*.pages.dev` URL. Only the
+   static shell is testable there: `FRONTEND_ORIGINS` (step 3 below)
+   allows `twiner.arredon.do` and localhost only, so on `*.pages.dev` (and
+   on preview deploys) every Lambda/S3 request fails CORS. Do the full
+   end-to-end check on the custom domain.
+
+## 2. Custom domain: `twiner.arredon.do`
 
 Since `arredon.do` is already a Cloudflare-managed zone:
 
 1. Pages project → "Custom domains" → "Set up a custom domain" →
-   `twin-r.arredon.do`.
+   `twiner.arredon.do`.
 2. Cloudflare adds the CNAME automatically (it manages the zone) and
    provisions the certificate — no manual DNS or cert step needed, unlike
    a non-Cloudflare-DNS domain.
@@ -54,7 +69,7 @@ Since `arredon.do` is already a Cloudflare-managed zone:
 ## 3. CORS reminder
 
 The S3 data bucket's CORS policy (`infra/stacks/twin_r_stack.py`,
-`FRONTEND_ORIGINS`) must include `https://twin-r.arredon.do` — it does by
+`FRONTEND_ORIGINS`) must include `https://twiner.arredon.do` — it does by
 default in the stack as written, but if you change the domain, update that
 list and re-run `cdk deploy` before the frontend will be able to fetch
 PMTiles from it (the browser will show a CORS error in devtools, not a 404,

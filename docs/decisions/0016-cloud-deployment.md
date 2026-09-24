@@ -75,7 +75,7 @@ Linux container pulls a manylinux wheel with GDAL bundled in, no
 `yum install gdal` or system library step needed in the Dockerfile.
 
 **Frontend**: Cloudflare Pages, built from `apps/web` (`npm run build`),
-served at `twin-r.arredon.do` via a CNAME onto Pages' subdomain (Cloudflare
+served at `twiner.arredon.do` via a CNAME onto Pages' subdomain (Cloudflare
 manages the certificate automatically once the zone is on Cloudflare and
 the CNAME is set). `VITE_SCENARIO_API_URL`/`VITE_*_PMTILES_URL` are Pages
 build-time environment variables pointing at the Lambda Function URL and

@@ -30,7 +30,7 @@ TILES_SERVICE_DIR = REPO_ROOT / "services" / "tiles"
 # apps/web's pmtiles/DuckDB-over-httpfs usage). localhost:5173 stays
 # allowed too so local dev can point VITE_*_PMTILES_URL at the real bucket
 # without a CORS error. Update this if the Cloudflare domain changes.
-FRONTEND_ORIGINS = ["https://twin-r.arredon.do", "http://localhost:5173"]
+FRONTEND_ORIGINS = ["https://twiner.arredon.do", "http://localhost:5173"]
 
 
 class TwinRStack(Stack):
