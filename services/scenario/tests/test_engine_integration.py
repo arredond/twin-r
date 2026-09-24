@@ -42,3 +42,28 @@ def test_scenario_runs_against_real_data_near_lorca():
     prob_cols = ["prob_none", "prob_slight", "prob_moderate", "prob_extensive", "prob_complete"]
     row_sums = result[prob_cols].sum(axis=1)
     assert (row_sums.sub(1.0).abs() < 1e-6).all()
+
+
+def test_streamed_summary_matches_the_full_result():
+    # summarize_scenario (the API path) reduces each streamed batch as it
+    # goes; forcing many small batches here must still give exactly what
+    # aggregating run_scenario's full per-building result gives.
+    from scenario.engine import summarize_scenario
+    from scenario.response import (
+        compute_municipality_stats,
+        count_damaged,
+        prepare_response_buildings,
+    )
+
+    rupture = Rupture(lat=37.67, lon=-1.70, mag=6.0, rake=0.0)
+    args = (rupture, BUILDINGS_GLOB, str(EXPOSURE), str(FRAGILITY))
+    full = run_scenario(*args, max_distance_km=15.0)
+    summary = summarize_scenario(*args, max_distance_km=15.0, batch_rows=4_000)
+
+    assert summary.n_evaluated == len(full)
+    assert summary.n_damaged == count_damaged(full)
+    assert summary.municipalities.stats() == compute_municipality_stats(full)
+    shipped = prepare_response_buildings(full)
+    assert sorted(summary.shipped.column("building_id").to_pylist()) == sorted(
+        shipped["building_id"]
+    )

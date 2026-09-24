@@ -76,7 +76,7 @@ def test_join_dedupes_repeated_values_across_features():
 
     from mapbox_vector_tile.Mapbox import vector_tile_pb2 as mvt_pb2
 
-    tile = mvt_pb2.tile()
+    tile = mvt_pb2.tile()  # pyrefly: ignore
     tile.ParseFromString(joined)
     layer = next(layer for layer in tile.layers if layer.name == "buildings")
     matching_values = [v for v in layer.values if v.HasField("int_value") and v.int_value == 3]

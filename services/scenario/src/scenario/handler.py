@@ -30,16 +30,12 @@ import gzip
 import json
 import os
 import re
+import time
 
 from .building_lookup import get_building
 from .faults import get_fault, load_faults, round_near_point, rupture_anchor
 from .probability_level import resolve_probability_level
-from .response import (
-    compute_municipality_stats,
-    count_damaged,
-    evaluated_region,
-    prepare_response_buildings,
-)
+from .response import evaluated_region
 from .rupture import Rupture, from_fault, from_manual_input
 from .scenario_id import cache_enabled, fault_scenario_id, manual_scenario_id
 
@@ -193,14 +189,16 @@ def _run_and_respond(rupture: Rupture, probability_level: str, scenario_id: str)
     # even though neither route's own code touches physics at all, purely
     # from this module-level import chain). Only the two scenario routes
     # that reach this function actually need it.
-    from .engine import run_scenario
+    t0 = time.monotonic()
+    from .engine import summarize_scenario
     from .ground_motion import estimate_significant_distance_km
 
+    t_import = time.monotonic()
     level_params = resolve_probability_level(probability_level)
     radius_km = estimate_significant_distance_km(
         rupture, sigma_multiplier=level_params.sigma_multiplier
     )
-    result = run_scenario(
+    summary = summarize_scenario(
         rupture,
         BUILDINGS_PATH,
         EXPOSURE_PATH,
@@ -209,10 +207,8 @@ def _run_and_respond(rupture: Rupture, probability_level: str, scenario_id: str)
         sigma_multiplier=level_params.sigma_multiplier,
         damage_percentile=level_params.damage_percentile,
     )
-    n_evaluated = len(result)
-    n_damaged = count_damaged(result)
-    municipality_stats = compute_municipality_stats(result)
-    buildings = prepare_response_buildings(result)
+    t_compute = time.monotonic()
+    municipality_stats = summary.municipalities.stats()
 
     # The response itself: everything the frontend needs, and nothing
     # per-building -- building and debris damage reach the map through the
@@ -231,8 +227,8 @@ def _run_and_respond(rupture: Rupture, probability_level: str, scenario_id: str)
             "probability_level": probability_level,
         },
         "evaluated_region": evaluated_region(rupture, radius_km),
-        "n_evaluated": n_evaluated,
-        "n_damaged": n_damaged,
+        "n_evaluated": summary.n_evaluated,
+        "n_damaged": summary.n_damaged,
         "municipality_stats": municipality_stats,
     }
 
@@ -245,8 +241,8 @@ def _run_and_respond(rupture: Rupture, probability_level: str, scenario_id: str)
         # tiles.results_store.write_buildings takes a plain list of dicts,
         # not a DataFrame -- that module has to stay free of pandas/pyarrow
         # to fit Lambda's 250MB zip-package limit (see its own docstring),
-        # so the DataFrame -> records conversion happens here instead,
-        # where pandas is already a dependency regardless.
+        # so the Arrow table -> records conversion happens here instead,
+        # where pyarrow is already a dependency regardless.
         from tiles.results_store import (
             init_scenario,
             write_buildings,
@@ -256,10 +252,22 @@ def _run_and_respond(rupture: Rupture, probability_level: str, scenario_id: str)
 
         init_scenario(RESULTS_BUCKET, scenario_id)
         write_municipality_stats(RESULTS_BUCKET, scenario_id, municipality_stats)
-        write_buildings(RESULTS_BUCKET, scenario_id, buildings.to_dict(orient="records"))
+        write_buildings(RESULTS_BUCKET, scenario_id, summary.shipped.to_pylist())
         # Last: marks this id as a complete, reusable result (the cache).
         write_response(RESULTS_BUCKET, scenario_id, payload)
 
+    # Per-stage timings, so a slow request in CloudWatch says where its
+    # time went -- the first scenario request in a fresh execution
+    # environment has run 60-85s vs. 2-20s warm (2026-09 cache-warm sweep),
+    # and the deferred imports above are one suspect.
+    t_end = time.monotonic()
+    print(
+        f"scenario: computed {scenario_id} {rupture.source} {probability_level}: "
+        f"{summary.n_evaluated} evaluated, {summary.shipped.num_rows} shipped; "
+        f"import {t_import - t0:.1f}s, first batch {summary.seconds_to_first_batch:.1f}s, "
+        f"compute {t_compute - t_import:.1f}s, "
+        f"write {t_end - t_compute:.1f}s"
+    )
     return _response(200, {**payload, "cached": False})
 
 

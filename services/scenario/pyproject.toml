@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "twiner scenario function: rupture -> GMPE -> damage, runnable as a Lambda or locally"
 requires-python = ">=3.12"
 dependencies = [
-    "duckdb>=1.1",
+    "duckdb>=1.5",  # to_arrow_reader (engine._site_batches)
     "openquake.engine>=3.19",
     # Not imported directly by this package, but openquake.hazardlib's
     # gsim.zhao_2016 does `import fiona` unconditionally at module load

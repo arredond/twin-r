@@ -3,6 +3,7 @@ import json
 import numpy as np
 from openquake.hazardlib.imt import PGA, SA
 from scenario.ground_motion import (
+    GriddedIntensity,
     compute_intensity,
     compute_intensity_gridded,
     estimate_significant_distance_km,
@@ -155,3 +156,46 @@ def test_compute_intensity_gridded_matches_ungridded_for_pga():
     exact = compute_intensity(rupture, lats, lons, PGA())
     gridded = compute_intensity_gridded(rupture, lats, lons, PGA())
     assert np.allclose(exact, gridded, rtol=0.05)
+
+
+def test_gridded_intensity_is_the_same_whether_sites_arrive_at_once_or_in_batches():
+    # engine.py streams a scenario's sites through GriddedIntensity in
+    # batches; a cell must get the same value whichever batch reaches it
+    # (fixed grid, cached cells), and every IM type must come out of the
+    # one shared Rjb computation matching compute_intensity_gridded.
+    rupture = Rupture(lat=37.67, lon=-1.70, mag=6.0, rake=0.0)
+    rng = np.random.default_rng(0)
+    lats = 37.5 + rng.random(2_000) * 0.5
+    lons = -2.0 + rng.random(2_000) * 0.5
+    vs30 = 300.0 + rng.random(2_000) * 500.0
+    imts = {"PGA": PGA(), "SA03": SA(0.3)}
+
+    whole = GriddedIntensity(rupture, imts, ref_lat=37.75).evaluate(lats, lons, vs30)
+    batched_grid = GriddedIntensity(rupture, imts, ref_lat=37.75)
+    # Reversed batches, so later batches mostly hit cells an earlier batch
+    # already computed (from a different representative site).
+    parts = [
+        batched_grid.evaluate(lats[i : i + 300], lons[i : i + 300], vs30[i : i + 300])
+        for i in range(0, 2_000, 300)
+    ]
+    batched = {name: np.concatenate([p[name] for p in parts]) for name in imts}
+
+    for name, imt in imts.items():
+        assert whole[name].shape == (2_000,)
+        # Same cells, same values; only which site represents a cell (and
+        # so its Vs30) may differ between the two orders.
+        assert np.allclose(whole[name], batched[name], rtol=0.5)
+        single = GriddedIntensity(rupture, {name: imt}, ref_lat=37.75).evaluate(lats, lons, vs30)
+        assert np.array_equal(whole[name], single[name])
+    # With a uniform Vs30 the representative doesn't matter: exact.
+    uniform = GriddedIntensity(rupture, imts, ref_lat=37.75)
+    batched_uniform = np.concatenate(
+        [
+            uniform.evaluate(lats[i : i + 300], lons[i : i + 300], 760.0)["PGA"]
+            for i in range(0, 2_000, 300)
+        ]
+    )
+    whole_uniform = GriddedIntensity(rupture, imts, ref_lat=37.75).evaluate(lats, lons, 760.0)[
+        "PGA"
+    ]
+    assert np.array_equal(batched_uniform, whole_uniform)

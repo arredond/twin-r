@@ -1,6 +1,6 @@
 """Local dev entrypoint for the scenario function.
 
-Runs the same domain logic (engine.run_scenario) as the Lambda handler
+Runs the same domain logic (engine.summarize_scenario) as the Lambda handler
 (handler.py), behind a small FastAPI app instead of API Gateway. This is the
 "local ↔ cloud parity" adapter split from docs/decisions/0001-compute-and-iac.md
 -- only this file and handler.py know about their respective runtimes.
@@ -21,16 +21,11 @@ from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 
 from .building_lookup import get_building
-from .engine import run_scenario
+from .engine import summarize_scenario
 from .faults import get_fault, load_faults, round_near_point, rupture_anchor
 from .ground_motion import estimate_significant_distance_km
 from .probability_level import ProbabilityLevel, resolve_probability_level
-from .response import (
-    compute_municipality_stats,
-    count_damaged,
-    evaluated_region,
-    prepare_response_buildings,
-)
+from .response import evaluated_region
 from .results_store import (
     init_scenario,
     read_municipality_stats,
@@ -154,7 +149,7 @@ def _run_and_serialize(rupture: Rupture, probability_level: str, scenario_id: st
 
     try:
         t0 = time.monotonic()
-        # Computed here (not left to run_scenario's own default) so the
+        # Computed here (not left to summarize_scenario's own default) so the
         # exact radius actually used for the spatial pre-filter is known
         # and can ride along in the response as `evaluated_region` --
         # that's what lets the frontend tell "never evaluated" (outside
@@ -165,7 +160,9 @@ def _run_and_serialize(rupture: Rupture, probability_level: str, scenario_id: st
         radius_km = estimate_significant_distance_km(
             rupture, sigma_multiplier=level_params.sigma_multiplier
         )
-        result = run_scenario(
+        # Streamed and reduced batch by batch (engine.summarize_scenario),
+        # never holding every evaluated building at once.
+        summary = summarize_scenario(
             rupture,
             BUILDINGS_PATH,
             EXPOSURE_PATH,
@@ -174,20 +171,17 @@ def _run_and_serialize(rupture: Rupture, probability_level: str, scenario_id: st
             sigma_multiplier=level_params.sigma_multiplier,
             damage_percentile=level_params.damage_percentile,
         )
-        n_evaluated = len(result)
-        n_damaged = count_damaged(result)
-        # Aggregated from the *full* result (before it's trimmed below) --
-        # see compute_municipality_stats's own docstring for why this needs
-        # lon/lat, which the thin payload deliberately drops.
-        municipality_stats = compute_municipality_stats(result)
+        n_evaluated = summary.n_evaluated
+        n_damaged = summary.n_damaged
+        # Counted over *every* evaluated building, not just the shipped ones.
+        municipality_stats = summary.municipalities.stats()
         write_municipality_stats(scenario_id, municipality_stats)
-        # Filters to damaged/uncertain buildings and trims to the thin
-        # frontend-facing payload (see response.py's docstring for why
-        # lon/lat/im_value/im_type are dropped and damage_state becomes an
-        # int code).
+        # Damaged/uncertain buildings only, in the thin frontend-facing
+        # shape (see response.py's docstring for why lon/lat/im_value/
+        # im_type are dropped and damage_state becomes an int code).
         # Written for the tile joins (buildings + debris, ADR-0019), not
         # returned -- the frontend never needs the per-building list.
-        result = prepare_response_buildings(result)
+        result = summary.shipped.to_pandas()
         write_buildings(scenario_id, result)
         # Fire-and-forget: pays each pool worker's cold-cache cost for this
         # scenario now, in the background, rather than on the user's first

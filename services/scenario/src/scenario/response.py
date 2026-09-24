@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 from pyproj import Geod
 
 from .damage import DAMAGE_STATES
@@ -62,24 +63,94 @@ _CATASTRO_CODE_TO_INE = {
 _THIN_COLUMNS = ["building_id", "damage_state_code", *(f"prob_{s.lower()}" for s in DAMAGE_STATES)]
 
 
+def shipped_mask(damage_state_code: np.ndarray, probs: np.ndarray) -> np.ndarray:
+    """Which buildings the tile joins list: damaged, or "None" by a margin
+    narrower than `UNCERTAINTY_MARGIN` over the next-likeliest state.
+    `probs` is (len(DAMAGE_STATES), n), rows in DAMAGE_STATES order."""
+    is_close_call = (probs[0] - probs[1:].max(axis=0, initial=0.0)) < UNCERTAINTY_MARGIN
+    return (damage_state_code != 0) | is_close_call
+
+
+def shipped_buildings_table(
+    building_ids: pa.Array,
+    damage_state_code: np.ndarray,
+    probs: np.ndarray,
+) -> pa.Table:
+    """The thin per-building rows (`_THIN_COLUMNS`) for the buildings
+    `shipped_mask` keeps, from one batch of array-shaped results."""
+    keep = shipped_mask(damage_state_code, probs)
+    # Rounded to keep the extra bytes from a full-precision float64
+    # round-trip down -- this subset is already small, but no reason to pay
+    # for digits no one reads.
+    return pa.table(
+        {
+            "building_id": building_ids.filter(pa.array(keep)),
+            "damage_state_code": damage_state_code[keep].astype(np.int64),
+            **{
+                f"prob_{state.lower()}": np.round(probs[i][keep], 4)
+                for i, state in enumerate(DAMAGE_STATES)
+            },
+        }
+    )
+
+
 def prepare_response_buildings(result: pd.DataFrame) -> pd.DataFrame:
     """Filter to damaged/uncertain buildings and trim to the thin payload.
 
     `result` is engine.py's full per-building DataFrame (building_id, lon,
     lat, damage_state, im_value, im_type, prob_*). Returns a DataFrame with
     only the columns the frontend needs, ready for `.to_dict(orient="records")`.
+    Same rule as the streaming path (`shipped_buildings_table`).
     """
-    max_other_prob = result[
-        ["prob_slight", "prob_moderate", "prob_extensive", "prob_complete"]
-    ].max(axis=1)
-    is_close_call = (result["prob_none"] - max_other_prob) < UNCERTAINTY_MARGIN
-    result = result[(result["damage_state"] != "None") | is_close_call]
-    # Rounded to keep the extra bytes from a full-precision float64
-    # round-trip down -- this subset is already small, but no reason to pay
-    # for digits no one reads.
-    result = result.round({c: 4 for c in result.columns if c.startswith("prob_")})
-    result = result.assign(damage_state_code=result["damage_state"].map(DAMAGE_STATE_CODES))
-    return result[_THIN_COLUMNS]
+    codes = result["damage_state"].map(DAMAGE_STATE_CODES).to_numpy(dtype=np.int64)
+    probs = result[[f"prob_{s.lower()}" for s in DAMAGE_STATES]].to_numpy(dtype=float).T
+    table = shipped_buildings_table(
+        pa.array(result["building_id"].to_numpy(), type=pa.string()), codes, probs
+    )
+    return table.to_pandas()
+
+
+class MunicipalityCounter:
+    """Per-municipality damage-state counts, accumulated batch by batch --
+    engine.py streams a scenario's buildings through in chunks, so these
+    counts are built up without ever holding every evaluated building at
+    once. `stats()` gives the `municipality_stats` payload (see
+    `compute_municipality_stats`). Buildings with no municipality_code are
+    left out, as a pandas groupby on that column would."""
+
+    def __init__(self) -> None:
+        self._counts: dict[str, np.ndarray] = {}
+
+    def add(self, municipality_codes: pa.Array, damage_state_code: np.ndarray) -> None:
+        encoded = pa.array(municipality_codes, type=pa.string()).dictionary_encode()
+        indices = encoded.indices.to_numpy(zero_copy_only=False)
+        valid = encoded.indices.is_valid().to_numpy(zero_copy_only=False)
+        n_codes, n_states = len(encoded.dictionary), len(DAMAGE_STATES)
+        counts = np.bincount(
+            indices[valid].astype(np.int64) * n_states + damage_state_code[valid],
+            minlength=n_codes * n_states,
+        ).reshape(n_codes, n_states)
+        for code, row in zip(encoded.dictionary.to_pylist(), counts):
+            if code in self._counts:
+                self._counts[code] += row
+            elif row.any():
+                self._counts[code] = row.copy()
+
+    @property
+    def n_damaged(self) -> int:
+        """Non-None buildings, the same "affected" definition as the stats
+        (`count_damaged`)."""
+        return int(sum(row[1:].sum() for row in self._counts.values()))
+
+    def stats(self) -> list[dict]:
+        return [
+            {
+                "municipality_code": _CATASTRO_CODE_TO_INE.get(code, code),
+                "n_evaluated": int(row.sum()),
+                "counts": {state: int(n) for state, n in zip(DAMAGE_STATES, row)},
+            }
+            for code, row in sorted(self._counts.items())
+        ]
 
 
 def compute_municipality_stats(result: pd.DataFrame) -> list[dict]:
@@ -88,8 +159,8 @@ def compute_municipality_stats(result: pd.DataFrame) -> list[dict]:
     per-municipality damage-state counts, for the map's low-zoom
     choropleth (apps/web/src/components/DamageMap.tsx).
 
-    A plain groupby on `result`'s `municipality_code` column -- pipelines/
-    exposure now stamps that column onto every building at ingest time
+    Keyed on `result`'s `municipality_code` column -- pipelines/exposure
+    stamps that column onto every building at ingest time
     (`pipeline.build_exposure`), from the same INE/Foral code that already
     names its `<ine_code>.buildings.parquet` part (region.py), so engine.py
     carries it straight through for free.
@@ -106,25 +177,18 @@ def compute_municipality_stats(result: pd.DataFrame) -> list[dict]:
     time instead of once per request removes that cost entirely, and drops
     the per-request dependency on municipalities.parquet/DuckDB's spatial
     extension for this endpoint altogether.
-    """
-    if result.empty:
-        return []
 
-    stats = []
-    for code, group in result.groupby("municipality_code"):
-        # pandas' groupby(...) key is typed as an opaque Hashable union, not
-        # the actual `str` it holds at runtime here -- same known
-        # pandas-stubs limitation as damage.py's groupby(...).indices.
-        code = str(code)  # pyrefly: ignore
-        state_counts = group["damage_state"].value_counts()
-        stats.append(
-            {
-                "municipality_code": _CATASTRO_CODE_TO_INE.get(code, code),
-                "n_evaluated": len(group),
-                "counts": {state: int(state_counts.get(state, 0)) for state in DAMAGE_STATES},
-            }
+    Same counting as the streaming path (`MunicipalityCounter`), which
+    engine.py's `summarize_scenario` uses; this DataFrame form is for
+    callers holding a full `run_scenario` result.
+    """
+    counter = MunicipalityCounter()
+    if not result.empty:
+        counter.add(
+            pa.array(result["municipality_code"].to_numpy(), type=pa.string()),
+            result["damage_state"].map(DAMAGE_STATE_CODES).to_numpy(dtype=np.int64),
         )
-    return stats
+    return counter.stats()
 
 
 def count_damaged(result: pd.DataFrame) -> int:
@@ -142,7 +206,7 @@ def evaluated_region(rupture: Rupture, radius_km: float) -> dict:
     rupture's own representative point.
 
     For a finite rupture, buildings are evaluated within `radius_km` of the
-    *whole surface* (engine.py's `_load_sites` pads the surface mesh's
+    *whole surface* (engine.py's `_site_batches` pads the surface mesh's
     extent), not of one point, so the circle's radius grows by the
     surface's farthest mesh point from the center. Without that, a long
     fault's circle (centered on its trace midpoint, faults.py's

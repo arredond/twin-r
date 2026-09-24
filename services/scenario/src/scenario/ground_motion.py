@@ -146,20 +146,28 @@ def compute_intensity(
     the same length as `lats`/`lons` (ADR-0015). `sigma_multiplier`: see
     `_intensity_at_distances`.
     """
-    n = len(lats)
-    if n == 0:
+    if len(lats) == 0:
         return np.zeros(0)
+    return _intensity_at_distances(
+        rupture, _rjb_km(rupture, lats, lons), imt, vs30, sigma_multiplier
+    )
 
+
+def _rjb_km(rupture: Rupture, lats: np.ndarray, lons: np.ndarray) -> np.ndarray:
+    """Joyner-Boore distance (km) from each site to the rupture -- the only
+    distance metric this GMPE uses, and by far the most expensive step of a
+    ground-motion evaluation (ADR-0009), so callers evaluating several IM
+    types compute it once and share it (see `GriddedIntensity`)."""
+    n = len(lats)
     if rupture.surface is not None:
         rjb_km = np.empty(n)
         for start in range(0, n, _DISTANCE_CHUNK_SIZE):
             end = start + _DISTANCE_CHUNK_SIZE
             chunk = Mesh(lons[start:end], lats[start:end])
             rjb_km[start:end] = rupture.surface.get_joyner_boore_distance(chunk)
-    else:
-        _, _, distance_m = _GEOD.inv(np.full(n, rupture.lon), np.full(n, rupture.lat), lons, lats)
-        rjb_km = np.abs(distance_m) / 1000.0
-    return _intensity_at_distances(rupture, rjb_km, imt, vs30, sigma_multiplier)
+        return rjb_km
+    _, _, distance_m = _GEOD.inv(np.full(n, rupture.lon), np.full(n, rupture.lat), lons, lats)
+    return np.abs(distance_m) / 1000.0
 
 
 # The GMPE's output is smooth in distance and barely changes across a span
@@ -205,35 +213,90 @@ def compute_intensity_gridded(
     (~0.8km) spacing, so a cell rarely spans more than one or two grid
     points to begin with. `sigma_multiplier`: see `_intensity_at_distances`.
     """
-    n = len(lats)
-    if n == 0:
+    if len(lats) == 0:
         return np.zeros(0)
-
-    deg_lat = cell_km / _KM_PER_DEGREE_LAT
-    deg_lon = cell_km / (_KM_PER_DEGREE_LAT * max(0.1, abs(math.cos(math.radians(lats.mean())))))
-    cell_row = np.floor(lats / deg_lat).astype(np.int64)
-    cell_col = np.floor(lons / deg_lon).astype(np.int64)
-
-    # Packing into one 1D key and taking np.unique on that (rather than
-    # axis=0 on the 2-column array directly) is ~7x faster in practice --
-    # measured, not assumed; numpy's 2D unique goes through a slower
-    # structured-view sort. 1_000_000 comfortably exceeds any realistic
-    # column-index spread for a single scenario's bounding box, so the
-    # packed key can't collide between two different (row, col) pairs --
-    # `cell_col` can be negative (west of Greenwich), so the group
-    # representative's row/col come back via `first_index` into the
-    # original arrays rather than by unpacking the key arithmetically,
-    # which would need a sign-aware divmod to round-trip correctly.
-    keys = cell_row * 1_000_000 + cell_col
-    _, first_index, inverse = np.unique(keys, return_index=True, return_inverse=True)
-    cell_lats = (cell_row[first_index] + 0.5) * deg_lat
-    cell_lons = (cell_col[first_index] + 0.5) * deg_lon
-    cell_vs30 = vs30[first_index] if isinstance(vs30, np.ndarray) else vs30
-
-    cell_intensity = compute_intensity(
-        rupture, cell_lats, cell_lons, imt, cell_vs30, sigma_multiplier
+    grid = GriddedIntensity(
+        rupture, {"im": imt}, float(lats.mean()), cell_km=cell_km, sigma_multiplier=sigma_multiplier
     )
-    return cell_intensity[inverse]
+    return grid.evaluate(lats, lons, vs30)["im"]
+
+
+class GriddedIntensity:
+    """`compute_intensity_gridded` for several IM types at once, over sites
+    that arrive in batches (engine.py streams a scenario's buildings through
+    in chunks, so memory stays bounded however many it evaluates).
+
+    The grid is fixed at construction -- `ref_lat` sets the cell width in
+    longitude -- rather than re-derived from each batch's own mean latitude,
+    so a cell is the same cell whichever batch a site lands in. Each
+    occupied cell is evaluated once, the first time any batch reaches it,
+    and remembered: a later batch touching the same cell reuses that value
+    (and that first site's Vs30, the same representative-site approximation
+    `compute_intensity_gridded` documents) instead of recomputing it.
+
+    The (costly, ADR-0009) Rjb distance calculation runs once per new cell
+    and is shared by every IM type, not repeated per IM type.
+    """
+
+    def __init__(
+        self,
+        rupture: Rupture,
+        imts: dict[str, IMT],
+        ref_lat: float,
+        cell_km: float = SA_GRID_CELL_KM,
+        sigma_multiplier: float = 0.0,
+    ):
+        self._rupture = rupture
+        self._imts = imts
+        self._sigma_multiplier = sigma_multiplier
+        self._deg_lat = cell_km / _KM_PER_DEGREE_LAT
+        self._deg_lon = cell_km / (
+            _KM_PER_DEGREE_LAT * max(0.1, abs(math.cos(math.radians(ref_lat))))
+        )
+        # Sorted cell keys seen so far, and each IM type's value per key.
+        self._keys = np.empty(0, dtype=np.int64)
+        self._values = {name: np.empty(0) for name in imts}
+
+    def evaluate(
+        self, lats: np.ndarray, lons: np.ndarray, vs30: float | np.ndarray
+    ) -> dict[str, np.ndarray]:
+        """Each IM type's value (g) at each site, keyed like `imts`."""
+        if len(lats) == 0:
+            return {name: np.zeros(0) for name in self._imts}
+
+        cell_row = np.floor(lats / self._deg_lat).astype(np.int64)
+        cell_col = np.floor(lons / self._deg_lon).astype(np.int64)
+        # Packing into one 1D key and taking np.unique on that (rather than
+        # axis=0 on the 2-column array directly) is ~7x faster in practice --
+        # measured, not assumed; numpy's 2D unique goes through a slower
+        # structured-view sort. 1_000_000 comfortably exceeds any realistic
+        # column-index spread for a single scenario's bounding box, so the
+        # packed key can't collide between two different (row, col) pairs --
+        # `cell_col` can be negative (west of Greenwich), so the group
+        # representative's row/col come back via `first_index` into the
+        # original arrays rather than by unpacking the key arithmetically,
+        # which would need a sign-aware divmod to round-trip correctly.
+        keys = cell_row * 1_000_000 + cell_col
+        cells, first_index, inverse = np.unique(keys, return_index=True, return_inverse=True)
+
+        new = ~np.isin(cells, self._keys, assume_unique=True)
+        if new.any():
+            rep = first_index[new]
+            cell_lats = (cell_row[rep] + 0.5) * self._deg_lat
+            cell_lons = (cell_col[rep] + 0.5) * self._deg_lon
+            cell_vs30 = vs30[rep] if isinstance(vs30, np.ndarray) else vs30
+            rjb_km = _rjb_km(self._rupture, cell_lats, cell_lons)
+            keys_all = np.concatenate([self._keys, cells[new]])
+            order = np.argsort(keys_all, kind="stable")
+            self._keys = keys_all[order]
+            for name, imt in self._imts.items():
+                new_values = _intensity_at_distances(
+                    self._rupture, rjb_km, imt, cell_vs30, self._sigma_multiplier
+                )
+                self._values[name] = np.concatenate([self._values[name], new_values])[order]
+
+        pos = np.searchsorted(self._keys, cells)[inverse]
+        return {name: values[pos] for name, values in self._values.items()}
 
 
 def estimate_significant_distance_km(

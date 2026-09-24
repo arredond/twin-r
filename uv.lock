@@ -2240,7 +2240,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "duckdb", specifier = ">=1.1" },
+    { name = "duckdb", specifier = ">=1.5" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fiona", specifier = ">=1.9" },
     { name = "numpy", specifier = ">=1.26" },

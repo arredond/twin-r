@@ -10,8 +10,11 @@ calculator performs, just without invoking the full Engine.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 
 from .fragility_lookup import DAMAGE_STATES_ASCENDING, FragilityTable
 
@@ -134,27 +137,77 @@ def evaluate_damage_batch(
     value/type each building was *actually* evaluated against, since that
     now varies by building rather than being one scenario-wide constant.
     """
-    n = len(taxonomy_classes)
-    damage_states = np.empty(n, dtype=object)
-    im_values_used = np.empty(n, dtype=float)
-    im_types_used = np.empty(n, dtype=object)
-    prob_arrays = {state: np.zeros(n) for state in DAMAGE_STATES}
-
-    groups = (
-        pd.DataFrame({"taxonomy_class": taxonomy_classes, "height_class": height_classes})
-        .groupby(["taxonomy_class", "height_class"], sort=False)
-        .indices
+    arrays = evaluate_damage_arrays(
+        fragility_table,
+        taxonomy_classes,
+        height_classes,
+        im_values_by_type,
+        damage_percentile=damage_percentile,
+    )
+    return pd.DataFrame(
+        {
+            "damage_state": np.array(DAMAGE_STATES, dtype=object)[arrays.damage_state_code],
+            "im_value": arrays.im_value,
+            "im_type": np.array(arrays.im_types, dtype=object)[arrays.im_type_code],
+            **{f"prob_{state.lower()}": arrays.probs[i] for i, state in enumerate(DAMAGE_STATES)},
+        }
     )
 
-    # pandas' groupby(...).indices is typed with an opaque Hashable key,
-    # not the actual (str, int) tuple it returns at runtime -- known
-    # pandas-stubs limitation, not a real type error.
-    for (taxonomy_class, height_class), idx in groups.items():  # pyrefly: ignore
-        idx = np.asarray(idx)
+
+@dataclass(frozen=True)
+class DamageArrays:
+    """`evaluate_damage_batch`'s result as plain arrays, one entry per
+    building -- what engine.py's streaming path works with, instead of a
+    DataFrame of per-building Python strings (a large part of a
+    multi-million-building scenario's peak memory, measured)."""
+
+    damage_state_code: np.ndarray  # int8, index into DAMAGE_STATES
+    probs: np.ndarray  # (len(DAMAGE_STATES), n) float64, rows in DAMAGE_STATES order
+    im_value: np.ndarray  # float64
+    im_type_code: np.ndarray  # int8, index into im_types
+    im_types: list[str]
+
+
+def evaluate_damage_arrays(
+    fragility_table: FragilityTable,
+    taxonomy_classes: np.ndarray | pa.Array,
+    height_classes: np.ndarray,
+    im_values_by_type: dict[str, np.ndarray],
+    damage_percentile: float | None = None,
+) -> DamageArrays:
+    """The array core of `evaluate_damage_batch` (see its docstring for the
+    method); `taxonomy_classes` may also be a pyarrow array, straight off
+    a DuckDB record batch."""
+    n = len(height_classes)
+    damage_codes = np.zeros(n, dtype=np.int8)
+    im_values_used = np.zeros(n, dtype=float)
+    im_types = sorted(im_values_by_type)
+    im_type_codes = np.zeros(n, dtype=np.int8)
+    probs = np.zeros((len(DAMAGE_STATES), n))
+    if n == 0:
+        return DamageArrays(damage_codes, probs, im_values_used, im_type_codes, im_types)
+
+    # Group by (taxonomy_class, height_class) without materializing a
+    # Python string per building: dictionary-encode the (low-cardinality)
+    # taxonomy column, pack it with the height into one integer key, and
+    # split one stable argsort of that key into its groups.
+    taxonomy = pa.array(taxonomy_classes, type=pa.string()).dictionary_encode()
+    taxonomy_names = taxonomy.dictionary.to_pylist()
+    taxonomy_codes = taxonomy.indices.to_numpy(zero_copy_only=False).astype(np.int64)
+    heights = np.asarray(height_classes, dtype=np.int64)
+    group_keys, group_of, group_sizes = np.unique(
+        taxonomy_codes * 1_000_000 + heights, return_inverse=True, return_counts=True
+    )
+    order = np.argsort(group_of, kind="stable")
+    group_indices = np.split(order, np.cumsum(group_sizes)[:-1])
+
+    for key, idx in zip(group_keys.tolist(), group_indices):
+        taxonomy_class = taxonomy_names[key // 1_000_000]
+        height_class = key % 1_000_000
         curve = fragility_table.get(taxonomy_class, height_class)
         im = np.asarray(im_values_by_type[curve.im_type])[idx]
         im_values_used[idx] = im
-        im_types_used[idx] = curve.im_type
+        im_type_codes[idx] = im_types.index(curve.im_type)
 
         exceedance = {
             state: np.interp(im, curve.im_values[state], curve.prob_exceedance[state])
@@ -177,20 +230,13 @@ def evaluate_damage_batch(
             normal = discrete[i] / safe_total
             fallback = 1.0 if state == "None" else 0.0
             group_probs[i] = np.where(is_degenerate, fallback, normal)
-            prob_arrays[state][idx] = group_probs[i]
+        probs[:, idx] = group_probs
 
         if damage_percentile is None:
             state_i = np.argmax(group_probs, axis=0)
         else:
             reaches_percentile = np.cumsum(group_probs, axis=0) >= damage_percentile
             state_i = np.argmax(reaches_percentile, axis=0)
-        damage_states[idx] = np.array(DAMAGE_STATES)[state_i]
+        damage_codes[idx] = state_i
 
-    return pd.DataFrame(
-        {
-            "damage_state": damage_states,
-            "im_value": im_values_used,
-            "im_type": im_types_used,
-            **{f"prob_{state.lower()}": prob_arrays[state] for state in DAMAGE_STATES},
-        }
-    )
+    return DamageArrays(damage_codes, probs, im_values_used, im_type_codes, im_types)

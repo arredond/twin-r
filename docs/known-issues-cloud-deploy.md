@@ -1,5 +1,15 @@
 # Known issues: deployed backend performance
 
+> **Update 2026-09-24:** the memory side of this is root-caused and fixed:
+> see ADR-0020 (docs/decisions/0020-streamed-scenario-evaluation.md).
+> Scenarios over ~4.6M evaluated buildings died with `Runtime.OutOfMemory`
+> at 3,008 MB. The cause was materializing every evaluated building at once,
+> mostly DuckDB's `.df()` conversion; neither the exposure join (suspect 1
+> below) nor DuckDB threads/`memory_limit` changed the peak. Evaluation is
+> now streamed in batches. Still open: the first scenario request in a fresh
+> execution environment takes 60-85s (vs. 2-20s warm). `handler.py` now logs
+> per-stage timings to pin that down.
+
 The AWS-deployed scenario Lambda (ADR-0016) is functionally correct --
 verified end-to-end against both fault mode (`fault_id=ES412`) and manual
 mode -- but noticeably slower than the local dev server for large-radius

@@ -8,33 +8,48 @@ result (docs/decisions/0003-precomputed-building-tiles.md) -- building_id +
 damage state + probabilities, no geometry. The frontend joins this onto the
 already-published buildings PMTiles layer client-side.
 
-This module always returns every evaluated building, including "None"
-damage ones -- filtering the response down to only-changed buildings (the
-fix for docs/validation-region-expansion.md §4's payload-size finding) is a
-presentation-layer decision, made in local.py/handler.py, not here. Keeps
-this function's contract stable for callers that *do* want the full
-picture (tests, future aggregate-stats/precompute jobs).
+Two entry points over the same streamed chain (`_evaluate_batches`):
+
+- `summarize_scenario`, what local.py/handler.py use: reduces each batch of
+  buildings to counts and the few rows the tile joins need as it goes, so
+  memory is bounded by the batch size, not by how many buildings a
+  scenario evaluates (4-6M near the 300km radius cap).
+- `run_scenario`: every evaluated building, including "None" ones, as one
+  DataFrame -- for callers that want the full picture (tests, the CLI).
+  Memory grows with the building count; not for the API path.
 """
 
 from __future__ import annotations
 
 import math
+import time
+from collections.abc import Iterator
+from dataclasses import dataclass
 
 import duckdb
+import numpy as np
 import pandas as pd
+import pyarrow as pa
 
-from .damage import evaluate_damage_batch
+from .damage import DAMAGE_STATES, DamageArrays, evaluate_damage_arrays
 from .db import ensure_httpfs, get_connection
 from .fragility_lookup import FragilityTable
 from .ground_motion import (
     DEFAULT_VS30,
     IM_TYPE_TO_IMT,
-    compute_intensity_gridded,
+    GriddedIntensity,
     estimate_significant_distance_km,
 )
+from .response import MunicipalityCounter, shipped_buildings_table
 from .rupture import Rupture
 
 _KM_PER_DEGREE_LAT = 111.0
+
+# Rows per streamed batch (`_site_batches`). Measured on ES412 "low"
+# (6.25M buildings): 250k-500k rows peak at ~1.4-1.6GB RSS end to end vs
+# ~3.3GB fully materialized, and ran faster, not slower (fewer, smaller
+# temporaries); 1M rows peaked at ~2.2GB.
+SITE_BATCH_ROWS = 250_000
 
 _RESULT_COLUMNS = [
     "building_id",
@@ -52,13 +67,25 @@ _RESULT_COLUMNS = [
 ]
 
 
-def _load_sites(
+def _site_batches(
     con: duckdb.DuckDBPyConnection,
     buildings_path: str,
     exposure_path: str,
     rupture: Rupture,
     max_distance_km: float,
-) -> pd.DataFrame:
+    batch_rows: int = SITE_BATCH_ROWS,
+) -> tuple[Iterator[pa.RecordBatch], float]:
+    """Every building in range, as a stream of Arrow record batches of at
+    most `batch_rows` rows, plus the box's center latitude (the fixed
+    reference `GriddedIntensity` sizes its cells by).
+
+    Streamed, not materialized: a σ=1 scenario near the 300km radius cap
+    evaluates 4-6M buildings, and turning all of them into one DataFrame
+    (`.df()`) peaked at ~3.3GB on its own -- the scenario Lambda's whole
+    3,008MB, where every such request died with `Runtime.OutOfMemory`
+    (measured on the 2026-09 cache-warm sweep, 49 of 603 scenarios). Batch
+    by batch, peak memory tracks `batch_rows` instead of the building
+    count."""
     if buildings_path.startswith("s3://") or exposure_path.startswith("s3://"):
         # httpfs + DuckDB's default AWS credential chain (picks up the
         # Lambda execution role automatically) -- no explicit credentials
@@ -103,7 +130,8 @@ def _load_sites(
     # reading the (much larger) geometry column for this query entirely.
     # Measured: ~14x faster than the ST_Centroid-on-the-fly equivalent for a
     # regional bounding-box query (see docs/decisions/0006).
-    return con.execute(
+    lat_lo, lat_hi = lat_min - lat_pad, lat_max + lat_pad
+    reader = con.execute(
         """
         SELECT
             b.building_id,
@@ -124,10 +152,11 @@ def _load_sites(
             exposure_path,
             lon_min - lon_pad,
             lon_max + lon_pad,
-            lat_min - lat_pad,
-            lat_max + lat_pad,
+            lat_lo,
+            lat_hi,
         ],
-    ).df()
+    ).to_arrow_reader(batch_rows)
+    return iter(reader), (lat_lo + lat_hi) / 2
 
 
 def _cos_deg(degrees: float) -> float:
@@ -169,7 +198,7 @@ def run_scenario(
     Columns: building_id, lon, lat, municipality_code, damage_state,
     im_value, im_type, prob_none, prob_slight, prob_moderate,
     prob_extensive, prob_complete.
-    `lon`/`lat` (the same precomputed centroid columns `_load_sites`
+    `lon`/`lat` (the same precomputed centroid columns `_site_batches`
     already reads) ride along so a caller that keeps only a subset of rows
     (local.py/handler.py drop the confidently-undamaged majority, see
     their own docstrings) can still place the ones it keeps on a map
@@ -188,44 +217,154 @@ def run_scenario(
             rupture, sigma_multiplier=sigma_multiplier
         )
 
-    con = get_connection()
-    sites = _load_sites(con, buildings_path, exposure_path, rupture, max_distance_km)
-    if sites.empty:
+    frames = [
+        pd.concat(
+            [
+                batch.select(["building_id", "lon", "lat", "municipality_code"]).to_pandas(),
+                pd.DataFrame(
+                    {
+                        "damage_state": np.array(DAMAGE_STATES, dtype=object)[
+                            damage.damage_state_code
+                        ],
+                        "im_value": damage.im_value,
+                        "im_type": np.array(damage.im_types, dtype=object)[damage.im_type_code],
+                        **{
+                            f"prob_{state.lower()}": damage.probs[i]
+                            for i, state in enumerate(DAMAGE_STATES)
+                        },
+                    }
+                ),
+            ],
+            axis=1,
+        )
+        for batch, damage in _evaluate_batches(
+            rupture,
+            buildings_path,
+            exposure_path,
+            fragility_path,
+            max_distance_km,
+            sigma_multiplier,
+            damage_percentile,
+        )
+    ]
+    if not frames:
         return pd.DataFrame(columns=_RESULT_COLUMNS)
+    return pd.concat(frames, ignore_index=True)
 
+
+@dataclass
+class ScenarioSummary:
+    """What local.py/handler.py actually need from a scenario, without the
+    full per-building result: the evaluated count, per-municipality
+    damage-state counts, and the thin rows for the buildings the tile joins
+    list (damaged or uncertain -- `response.shipped_mask`)."""
+
+    n_evaluated: int
+    municipalities: MunicipalityCounter
+    shipped: pa.Table
+    # From the call until the first batch of sites was evaluated: query
+    # setup plus the first S3 reads, in the deployed stack -- logged by
+    # handler.py to tell setup cost apart from per-building compute.
+    seconds_to_first_batch: float = 0.0
+
+    @property
+    def n_damaged(self) -> int:
+        return self.municipalities.n_damaged
+
+
+def summarize_scenario(
+    rupture: Rupture,
+    buildings_path: str,
+    exposure_path: str,
+    fragility_path: str,
+    max_distance_km: float | None = None,
+    sigma_multiplier: float = 0.0,
+    damage_percentile: float | None = None,
+    batch_rows: int = SITE_BATCH_ROWS,
+) -> ScenarioSummary:
+    """`run_scenario`'s chain (same arguments, same per-building results),
+    reduced batch by batch to a `ScenarioSummary` as the buildings stream
+    through, so memory stays bounded by `batch_rows` rather than by how
+    many buildings the scenario evaluates. This is the path the API uses."""
+    if max_distance_km is None:
+        max_distance_km = estimate_significant_distance_km(
+            rupture, sigma_multiplier=sigma_multiplier
+        )
+
+    t0 = time.monotonic()
+    seconds_to_first_batch = 0.0
+    n_evaluated = 0
+    municipalities = MunicipalityCounter()
+    shipped = []
+    for batch, damage in _evaluate_batches(
+        rupture,
+        buildings_path,
+        exposure_path,
+        fragility_path,
+        max_distance_km,
+        sigma_multiplier,
+        damage_percentile,
+        batch_rows,
+    ):
+        if n_evaluated == 0:
+            seconds_to_first_batch = time.monotonic() - t0
+        n_evaluated += batch.num_rows
+        municipalities.add(batch.column("municipality_code"), damage.damage_state_code)
+        shipped.append(
+            shipped_buildings_table(
+                batch.column("building_id"), damage.damage_state_code, damage.probs
+            )
+        )
+    shipped_table = (
+        pa.concat_tables(shipped)
+        if shipped
+        else shipped_buildings_table(
+            pa.array([], pa.string()), np.zeros(0, np.int8), np.zeros((len(DAMAGE_STATES), 0))
+        )
+    )
+    return ScenarioSummary(n_evaluated, municipalities, shipped_table, seconds_to_first_batch)
+
+
+def _evaluate_batches(
+    rupture: Rupture,
+    buildings_path: str,
+    exposure_path: str,
+    fragility_path: str,
+    max_distance_km: float,
+    sigma_multiplier: float,
+    damage_percentile: float | None,
+    batch_rows: int = SITE_BATCH_ROWS,
+) -> Iterator[tuple[pa.RecordBatch, DamageArrays]]:
+    """Ground motion + damage for each streamed batch of sites -- the one
+    chain both `run_scenario` and `summarize_scenario` are built on."""
+    con = get_connection()
+    batches, ref_lat = _site_batches(
+        con, buildings_path, exposure_path, rupture, max_distance_km, batch_rows
+    )
     fragility_table = FragilityTable.from_parquet(fragility_path)
-
     # Only the IM types this fragility set actually vendors (FragilityTable.
     # used_im_types), not every entry in IM_TYPE_TO_IMT -- avoids paying for
-    # a GMPE evaluation of an IM type nothing here is indexed by.
-    lats = sites["lat"].to_numpy()
-    lons = sites["lon"].to_numpy()
-    vs30 = sites["vs30"].to_numpy()
-    im_values_by_type = {
-        im_type: compute_intensity_gridded(
-            rupture,
-            lats,
-            lons,
-            IM_TYPE_TO_IMT[im_type],
-            vs30=vs30,
-            sigma_multiplier=sigma_multiplier,
+    # a GMPE evaluation of an IM type nothing here is indexed by. One grid
+    # for the whole scenario, shared by every batch (see GriddedIntensity).
+    grid = GriddedIntensity(
+        rupture,
+        {im_type: IM_TYPE_TO_IMT[im_type] for im_type in sorted(fragility_table.used_im_types())},
+        ref_lat,
+        sigma_multiplier=sigma_multiplier,
+    )
+    for batch in batches:
+        if batch.num_rows == 0:
+            continue
+        im_values_by_type = grid.evaluate(
+            batch.column("lat").to_numpy(),
+            batch.column("lon").to_numpy(),
+            batch.column("vs30").to_numpy(),
         )
-        for im_type in fragility_table.used_im_types()
-    }
-
-    damage = evaluate_damage_batch(
-        fragility_table,
-        sites["taxonomy_class"].to_numpy(),
-        sites["height_class"].to_numpy(),
-        im_values_by_type,
-        damage_percentile=damage_percentile,
-    )
-
-    result = pd.concat(
-        [
-            sites[["building_id", "lon", "lat", "municipality_code"]].reset_index(drop=True),
-            damage.reset_index(drop=True),
-        ],
-        axis=1,
-    )
-    return result
+        damage = evaluate_damage_arrays(
+            fragility_table,
+            batch.column("taxonomy_class"),
+            batch.column("height_class").to_numpy(),
+            im_values_by_type,
+            damage_percentile=damage_percentile,
+        )
+        yield batch, damage
