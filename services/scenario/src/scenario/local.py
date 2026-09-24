@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-import uuid
 from concurrent.futures import ProcessPoolExecutor
 
 from fastapi import FastAPI, HTTPException, Response
@@ -23,18 +22,21 @@ from pydantic import BaseModel
 
 from .building_lookup import get_building
 from .engine import run_scenario
-from .faults import get_fault, load_nearby_faults
+from .faults import get_fault, load_faults, round_near_point, rupture_anchor
 from .ground_motion import estimate_significant_distance_km
 from .probability_level import ProbabilityLevel, resolve_probability_level
-from .response import compute_municipality_stats, prepare_response_buildings
+from .response import compute_municipality_stats, evaluated_region, prepare_response_buildings
 from .results_store import (
     init_scenario,
     read_municipality_stats,
+    read_response,
     read_status,
     write_buildings,
     write_municipality_stats,
+    write_response,
 )
 from .rupture import Rupture, from_fault, from_manual_input
+from .scenario_id import cache_enabled, fault_scenario_id, manual_scenario_id
 from .tile_join import join_tile, warm_cache
 
 app = FastAPI(title="twiner scenario function (local)")
@@ -89,12 +91,6 @@ BUILDINGS_PMTILES_PATH = os.environ.get(
     "TWINER_BUILDINGS_PMTILES_PATH", f"{DATA_DIR}/exposure/buildings.pmtiles"
 )
 
-# Default reference point when a caller doesn't specify one -- Madrid, as
-# an arbitrary central point, not because it's seismically special. Any
-# scenario/fault call can override via lat/lon or near_lat/near_lon; the
-# frontend's map-driven flows always do.
-DEFAULT_LAT, DEFAULT_LON = 40.4168, -3.7038
-
 
 class ManualRuptureRequest(BaseModel):
     lat: float
@@ -113,21 +109,37 @@ class ManualRuptureRequest(BaseModel):
     probability_level: ProbabilityLevel = "high"
 
 
-def _run_and_serialize(rupture: Rupture, probability_level: str) -> dict:
+def _validate_probability_level(probability_level: str) -> None:
     try:
-        level_params = resolve_probability_level(probability_level)
+        resolve_probability_level(probability_level)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    # Random for now -- every run gets a fresh id even if the exact same
-    # rupture/probability_level was already computed. Future: hash the
-    # scenario's actual characteristics (rupture params, probability_level)
-    # plus the exposure/fragility data version and pipeline version into
-    # this id instead, so an identical request naturally lands on the same
-    # scenario_id and can reuse/cache the existing results/ entry rather
-    # than recomputing. Not done now -- flagging so the id generation isn't
-    # assumed stable/content-addressed before that lands.
-    scenario_id = uuid.uuid4().hex
+
+def _cached_response(scenario_id: str) -> dict | None:
+    """A stored result for this content-addressed id (scenario_id.py), if
+    the cache is on and one exists. Warms the tile pool for it the same way
+    a fresh compute does, since the user's next move is fetching its
+    tiles."""
+    if not cache_enabled():
+        return None
+    t0 = time.monotonic()
+    payload = read_response(scenario_id)
+    if payload is None:
+        return None
+    for _ in range(_TILE_POOL_WORKERS):
+        _TILE_POOL.submit(warm_cache, BUILDINGS_PMTILES_PATH, scenario_id)
+    payload["cached"] = True
+    payload["elapsed_ms"] = round((time.monotonic() - t0) * 1000, 1)
+    print(f"scenario: cache hit {scenario_id} ({payload['rupture']['source']})")
+    return payload
+
+
+def _run_and_serialize(rupture: Rupture, probability_level: str, scenario_id: str) -> dict:
+    """Computes the scenario and stores it under `scenario_id` (content-
+    addressed, scenario_id.py -- minted by the caller, which is also where
+    the cache lookup happens, before any rupture is built)."""
+    level_params = resolve_probability_level(probability_level)
     init_scenario(scenario_id)
 
     try:
@@ -184,7 +196,7 @@ def _run_and_serialize(rupture: Rupture, probability_level: str) -> dict:
         f"{len(result)} sent (damaged or uncertain), "
         f"finite_rupture={rupture.surface is not None}, in {elapsed_ms}ms"
     )
-    return {
+    payload = {
         "scenario_id": scenario_id,
         "rupture": {
             "lat": rupture.lat,
@@ -201,26 +213,27 @@ def _run_and_serialize(rupture: Rupture, probability_level: str) -> dict:
             # than needing to remember the default.
             "probability_level": probability_level,
         },
-        # The circle the frontend colors green-by-default within (any
-        # building not individually listed below) -- an approximation of
-        # the true spatial pre-filter, which is a padded lon/lat *box*
-        # around this same point (_load_sites in engine.py), always at
-        # least as large as this circle. A building right in the box's
-        # corner, just outside this circle, could in principle have been
-        # evaluated (and, correctly, omitted for being confidently
-        # undamaged) yet render grey instead of green -- geometrically the
-        # farthest, least-relevant sliver of the evaluated area, not worth
-        # a second exact-shape payload to close.
-        "evaluated_region": {"lat": rupture.lat, "lon": rupture.lon, "radius_km": radius_km},
+        # See response.evaluated_region's docstring (centered on the
+        # rupture's own point, widened to cover a finite surface's extent).
+        "evaluated_region": evaluated_region(rupture, radius_km),
         "buildings": result.to_dict(orient="records"),
         "n_evaluated": n_evaluated,
-        "elapsed_ms": elapsed_ms,
         "municipality_stats": municipality_stats,
     }
+    # Stored (without the per-request fields added below) whether or not
+    # the cache is on -- see results_store.py's docstring.
+    write_response(scenario_id, payload)
+    return {**payload, "cached": False, "elapsed_ms": elapsed_ms}
 
 
 @app.post("/scenarios/manual")
 def run_manual_scenario(req: ManualRuptureRequest) -> dict:
+    _validate_probability_level(req.probability_level)
+    scenario_id = manual_scenario_id(
+        req.lat, req.lon, req.mag, req.rake, req.strike, req.dip, req.ztor_km, req.probability_level
+    )
+    if (cached := _cached_response(scenario_id)) is not None:
+        return cached
     rupture = from_manual_input(
         lat=req.lat,
         lon=req.lon,
@@ -230,20 +243,18 @@ def run_manual_scenario(req: ManualRuptureRequest) -> dict:
         dip=req.dip,
         ztor_km=req.ztor_km,
     )
-    return _run_and_serialize(rupture, req.probability_level)
+    return _run_and_serialize(rupture, req.probability_level, scenario_id)
 
 
 @app.get("/faults")
-def list_faults(
-    lat: float = DEFAULT_LAT, lon: float = DEFAULT_LON, radius_km: float = 3000.0
-) -> dict:
-    """Faults within `radius_km` of (lat, lon), nearest first -- feeds the
-    frontend's "Automatic" fault picker (docs/merisur.md §4.1). QAFI only
-    has 201 faults nationwide, so the default radius is generous enough
-    that this effectively returns all of them, sorted by distance from
-    (lat, lon), regardless of where in Spain that reference point is."""
+def list_faults() -> dict:
+    """Every fault in the dataset (QAFI v4 today: 201 nationwide), sorted by
+    name -- feeds the frontend's "Automatic" fault picker and fault map
+    layer (docs/merisur.md §4.1). No location/radius filtering: the whole
+    set is small, and ordering it relative to the map view is the
+    frontend's job (it already has every trace's geometry)."""
     try:
-        faults = load_nearby_faults(FAULTS_PATH, lat, lon, radius_km)
+        faults = load_faults(FAULTS_PATH)
     except FileNotFoundError as e:
         raise HTTPException(status_code=500, detail=f"missing pipeline output: {e}") from e
     return {"faults": faults.to_dict(orient="records")}
@@ -252,32 +263,47 @@ def list_faults(
 @app.get("/scenarios/fault")
 def run_fault_scenario(
     fault_id: str,
-    near_lat: float = DEFAULT_LAT,
-    near_lon: float = DEFAULT_LON,
     probability_level: ProbabilityLevel = "high",
+    near_lat: float | None = None,
+    near_lon: float | None = None,
 ) -> dict:
     """Automatic mode (docs/merisur.md §4.1): a QAFI fault's own
-    maximum-magnitude earthquake. A GET, not a POST -- unlike manual mode,
-    every parameter that actually changes the returned `buildings` is
-    already fixed by `fault_id` and `probability_level` alone (mmax/
-    geometry/dip/rake all come from QAFI, see rupture.py's `from_fault`);
-    `near_lat`/`near_lon` only pick which point on the trace gets echoed
-    back as `rupture`'s location and `evaluated_region`'s display circle
-    center. That makes this cacheable and testable as a plain URL, the
-    same as `/faults` below.
+    maximum-magnitude earthquake. A GET, not a POST: `fault_id` and
+    `probability_level` fully determine the result for any fault with a
+    full rupture geometry in QAFI (all of QAFI v4's) -- mmax/geometry/dip/
+    rake all come from QAFI, and the rupture's location comes from its own
+    trace (faults.py's `rupture_anchor`). That makes it cacheable by URL.
+
+    `near_lat`/`near_lon` are optional and only used for a fault *without*
+    that geometry (`has_rupture_geometry` false in /faults), which falls
+    back to a point source at the trace point closest to them. Ignored --
+    and left out of the scenario_id -- for every other fault.
     """
+    near_lat, near_lon = round_near_point(near_lat, near_lon)
     try:
         fault = get_fault(FAULTS_PATH, fault_id, near_lat, near_lon)
+        anchor_lat, anchor_lon, near_used = rupture_anchor(fault)
     except FileNotFoundError as e:
         raise HTTPException(status_code=500, detail=f"missing pipeline output: {e}") from e
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    scenario_id = fault_scenario_id(
+        fault_id,
+        probability_level,
+        near_lat if near_used else None,
+        near_lon if near_used else None,
+    )
+    if (cached := _cached_response(scenario_id)) is not None:
+        return cached
 
     rupture = from_fault(
         fault_id=fault["fault_id"],
         name=fault["name"],
-        point_lat=fault["lat"],
-        point_lon=fault["lon"],
+        point_lat=anchor_lat,
+        point_lon=anchor_lon,
         mmax=fault["mmax"],
         rake=fault["rake"],
         geometry_geojson=fault["geometry_geojson"],
@@ -285,7 +311,7 @@ def run_fault_scenario(
         min_depth_km=fault["min_depth_km"],
         max_depth_km=fault["max_depth_km"],
     )
-    return _run_and_serialize(rupture, probability_level)
+    return _run_and_serialize(rupture, probability_level, scenario_id)
 
 
 @app.get("/buildings/{building_id}")

@@ -45,8 +45,20 @@ def _pmtiles_reader(path: str) -> Reader:
     return Reader(MmapSource(f))
 
 
-@lru_cache(maxsize=64)
 def _building_results(scenario_id: str) -> dict[str, dict]:
+    """See `_load_building_results`. Keyed on the file's mtime as well as
+    `scenario_id`: ids are content-addressed (scenario_id.py), so with the
+    scenario cache off a rerun rewrites the *same* scenario_id's file --
+    e.g. after regenerating local data without bumping TWINER_DATA_VERSION
+    -- and a pool worker's cache must not keep serving the old rows."""
+    path = scenario_dir(scenario_id) / "buildings.json.gz"
+    if not path.exists():
+        raise FileNotFoundError(f"no results for scenario_id {scenario_id!r}")
+    return _load_building_results(scenario_id, path.stat().st_mtime_ns)
+
+
+@lru_cache(maxsize=64)
+def _load_building_results(scenario_id: str, mtime_ns: int) -> dict[str, dict]:
     """building_id -> the scenario's thin result row, as a plain dict of
     extra tile properties. Cached per scenario_id (small: at most tens of
     thousands of rows) so repeated tile requests for the same scenario --
@@ -64,8 +76,6 @@ def _building_results(scenario_id: str) -> dict[str, dict]:
     `.drop()` loop measured 36s for 400k rows; this is a single pass
     building plain dicts, no DataFrame construction at all)."""
     path = scenario_dir(scenario_id) / "buildings.json.gz"
-    if not path.exists():
-        raise FileNotFoundError(f"no results for scenario_id {scenario_id!r}")
     rows = json.loads(gzip.decompress(path.read_bytes()))
     # keep-last: building_id isn't always unique in the pipeline output
     # (see DATA-SOURCES.md's "non-unique building_id" known issue) --

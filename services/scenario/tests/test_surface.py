@@ -11,7 +11,8 @@ import json
 import numpy as np
 import pytest
 from openquake.hazardlib.geo.mesh import Mesh
-from scenario.surface import _longest_linestring_coords, build_fault_surface
+from scenario.surface import build_fault_surface
+from scenario.trace import longest_linestring_coords
 
 # A simple, well-behaved two-point trace -- enough to validate the happy path.
 SIMPLE_TRACE_GEOJSON = json.dumps(
@@ -41,7 +42,7 @@ def test_build_fault_surface_from_simple_trace():
 
 
 def test_build_fault_surface_picks_longest_multilinestring_component():
-    coords = _longest_linestring_coords(json.loads(MULTI_TRACE_GEOJSON))
+    coords = longest_linestring_coords(json.loads(MULTI_TRACE_GEOJSON))
     assert coords == [[-1.75, 37.60], [-1.65, 37.75]]
 
 

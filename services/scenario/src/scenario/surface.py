@@ -21,6 +21,8 @@ from openquake.hazardlib.geo.surface.base import BaseSurface
 from openquake.hazardlib.geo.surface.simple_fault import SimpleFaultSurface
 from pyproj import Geod
 
+from .trace import longest_linestring_coords
+
 # Sub-second to build + compute distances for even QAFI's longest fault
 # (282km) against tens of thousands of sites at this spacing -- see
 # docs/decisions/0007 for the measurements that picked it. Tighter spacing
@@ -29,36 +31,6 @@ from pyproj import Geod
 DEFAULT_MESH_SPACING_KM = 2.0
 
 _GEOD = Geod(ellps="WGS84")
-
-
-def _longest_linestring_coords(geometry: dict) -> list[list[float]]:
-    """Coordinates of the longest component of a (Multi)LineString GeoJSON geometry.
-
-    Some QAFI traces are mapped as several disconnected LineString pieces
-    (digitizing artifacts / separately-mapped segments) -- SimpleFaultSurface
-    needs one continuous line, so we use the longest single piece rather
-    than stitching pieces that may not be geographically contiguous. This
-    is a documented simplification: a trace's minor secondary strands are
-    dropped when building the rupture plane (the full trace is still used
-    as-is for map display, via geometry_geojson -- only surface
-    construction simplifies it).
-    """
-    if geometry["type"] == "LineString":
-        return geometry["coordinates"]
-    if geometry["type"] == "MultiLineString":
-
-        def planar_length(coords: list[list[float]]) -> float:
-            # Rough (non-geodesic) length -- only used to rank a single
-            # fault's own pieces against each other, not compared across
-            # faults, so the small distortion doesn't matter.
-            return sum(
-                ((coords[i][0] - coords[i - 1][0]) ** 2 + (coords[i][1] - coords[i - 1][1]) ** 2)
-                ** 0.5
-                for i in range(1, len(coords))
-            )
-
-        return max(geometry["coordinates"], key=planar_length)
-    raise ValueError(f"unsupported geometry type for a fault trace: {geometry['type']}")
 
 
 def build_fault_surface(
@@ -76,7 +48,7 @@ def build_fault_surface(
     approximation (rupture.py) for that one fault rather than fail the
     whole scenario over one fault's messy digitization.
     """
-    coords = _longest_linestring_coords(json.loads(geometry_geojson))
+    coords = longest_linestring_coords(json.loads(geometry_geojson))
     trace = Line([Point(lon, lat) for lon, lat in coords])
     return SimpleFaultSurface.from_fault_data(
         trace, min_depth_km, max_depth_km, dip, mesh_spacing_km

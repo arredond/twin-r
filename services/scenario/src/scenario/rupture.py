@@ -88,11 +88,13 @@ def from_fault(
 
     Matches MERISUR's "Automatic" mode (docs/merisur.md §4.1: "select an
     existing fault and generate the earthquake of maximum magnitude
-    associated with it"). `point_lat`/`point_lon` is expected to be the
-    point on the fault trace nearest the exposure area of interest
-    (see faults.py's `load_nearby_faults`/`get_fault`) -- always set, used
-    as the fallback location and for the spatial pre-filter regardless of
-    whether a surface is built. `rake` should come from QAFI's own
+    associated with it"). `point_lat`/`point_lon` is the rupture's
+    representative point on the trace (faults.py's `rupture_anchor`: the
+    trace midpoint, or for a fault without full rupture geometry, the
+    trace point nearest a caller's reference point) -- always set, used as
+    the point-source fallback location, the response's echoed rupture
+    location and the center of its evaluated-region circle. With a surface,
+    the surface alone drives the spatial pre-filter and distances. `rake` should come from QAFI's own
     published focal mechanism (ADR-0004) where available; falls back to 0
     (strike-slip) only if genuinely missing/NaN.
 

@@ -85,6 +85,14 @@ single-municipality test crawl (`uv run python -m exposure <raw_dir>
 directory other than `data/exposure` so it doesn't collide with the full
 national dataset) instead of the full national crawl above.
 
+The scenario result cache (ADR-0018) is **off** locally by default: every
+run recomputes. Use `TWINER_SCENARIO_CACHE=1 twiner start` to exercise it,
+and bump `TWINER_DATA_VERSION` after rebuilding local data while it's on.
+The deployed stack has it on. Bump `API_VERSION` in
+`services/scenario/src/scenario/scenario_id.py` whenever a change could
+alter scenario results, and `DATA_VERSION` in
+`infra/stacks/twiner_stack.py` whenever you upload new data.
+
 ## Working in multiple worktrees
 
 `data/` and `apps/web/public/data/` are gitignored (the pipeline outputs

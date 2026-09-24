@@ -4,7 +4,7 @@ test_engine_integration.py for the same pattern)."""
 from pathlib import Path
 
 import pytest
-from scenario.faults import get_fault, load_nearby_faults
+from scenario.faults import get_fault, load_faults, rupture_anchor
 
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 FAULTS = DATA_DIR / "faults" / "qafi_faults.parquet"
@@ -14,30 +14,39 @@ pytestmark = pytest.mark.skipif(not FAULTS.exists(), reason="run pipelines/fault
 LORCA_LAT, LORCA_LON = 37.6733, -1.7013
 
 
-def test_alhama_de_murcia_is_the_nearest_fault_to_lorca():
-    # The fault responsible for the real 2011 Lorca earthquake
-    # (docs/merisur.md, docs/milestone-1-plan.md task 9) should come back
-    # as the closest QAFI fault to Lorca -- a good sanity check that our
-    # nearest-point query is wired correctly, independent of any scenario
-    # math.
-    faults = load_nearby_faults(str(FAULTS), LORCA_LAT, LORCA_LON, radius_km=50)
-    assert len(faults) > 0
-    assert "Alhama de Murcia" in faults.iloc[0]["name"]
-    assert faults.iloc[0]["distance_km"] < 5
+def test_load_faults_returns_every_fault():
+    faults = load_faults(str(FAULTS))
+    assert len(faults) == faults["fault_id"].nunique() > 100
+    assert faults["name"].is_monotonic_increasing
 
 
-def test_radius_filters_out_far_faults():
-    faults = load_nearby_faults(str(FAULTS), LORCA_LAT, LORCA_LON, radius_km=5)
-    assert (faults["distance_km"] <= 5).all()
+def test_every_qafi_fault_has_rupture_geometry():
+    # The premise of making near_lat/near_lon optional: every QAFI v4 fault
+    # derives its rupture from its own geometry. If a future dataset breaks
+    # this, the frontend starts sending a reference point for just those
+    # faults (has_rupture_geometry false) -- not a failure, but worth
+    # knowing about.
+    assert load_faults(str(FAULTS))["has_rupture_geometry"].all()
 
 
 def test_get_fault_raises_for_unknown_id():
     with pytest.raises(KeyError):
-        get_fault(str(FAULTS), "NOT-A-REAL-FAULT-ID", LORCA_LAT, LORCA_LON)
+        get_fault(str(FAULTS), "NOT-A-REAL-FAULT-ID")
 
 
-def test_get_fault_returns_the_requested_fault():
-    faults = load_nearby_faults(str(FAULTS), LORCA_LAT, LORCA_LON, radius_km=50)
-    fault_id = faults.iloc[0]["fault_id"]
+def test_alhama_de_murcia_closest_point_to_lorca_is_nearby():
+    # The fault behind the real 2011 Lorca earthquake runs right past
+    # Lorca -- a sanity check on get_fault's closest-point query.
+    faults = load_faults(str(FAULTS))
+    fault_id = faults[faults["name"].str.contains("Alhama de Murcia")].iloc[0]["fault_id"]
     fault = get_fault(str(FAULTS), fault_id, LORCA_LAT, LORCA_LON)
-    assert fault["fault_id"] == fault_id
+    assert abs(fault["closest_lat"] - LORCA_LAT) < 0.1
+    assert abs(fault["closest_lon"] - LORCA_LON) < 0.1
+
+
+def test_rupture_anchor_ignores_near_point_for_faults_with_geometry():
+    fault_id = load_faults(str(FAULTS)).iloc[0]["fault_id"]
+    without = rupture_anchor(get_fault(str(FAULTS), fault_id))
+    with_near = rupture_anchor(get_fault(str(FAULTS), fault_id, LORCA_LAT, LORCA_LON))
+    assert without == with_near
+    assert without[2] is False

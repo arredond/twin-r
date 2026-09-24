@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 from scenario.engine import run_scenario
-from scenario.faults import get_fault
+from scenario.faults import get_fault, rupture_anchor
 from scenario.ground_motion import estimate_significant_distance_km
 from scenario.probability_level import resolve_probability_level
 from scenario.rupture import from_fault
@@ -59,11 +59,12 @@ MAX_SHORT_FAULT_SECONDS = 15.0
 
 def _run_fault(fault_id: str, near_lat: float, near_lon: float, probability_level: str):
     fault = get_fault(str(FAULTS), fault_id, near_lat, near_lon)
+    point_lat, point_lon, _ = rupture_anchor(fault)
     rupture = from_fault(
         fault_id=fault["fault_id"],
         name=fault["name"],
-        point_lat=fault["lat"],
-        point_lon=fault["lon"],
+        point_lat=point_lat,
+        point_lon=point_lon,
         mmax=fault["mmax"],
         rake=fault["rake"],
         geometry_geojson=fault["geometry_geojson"],

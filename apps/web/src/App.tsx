@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DamageMap } from "./components/DamageMap";
 import { RuptureForm, type ManualParams } from "./components/RuptureForm";
 import { PROBABILITY_LEVEL_LABELS } from "./probabilityLevels";
@@ -29,13 +29,15 @@ export default function App() {
   const [faultsError, setFaultsError] = useState<string | null>(null);
   const [selectedFaultId, setSelectedFaultId] = useState<string | null>(null);
 
-  // Where a fault's rupture gets anchored on its trace (scenario/faults.py:
-  // "closest point on the trace to this reference") -- kept live from the
-  // map's own center/click, never a fixed default. See DamageMap's
-  // onMapMove/onFaultClick docs: a single nationwide default point makes a
-  // long fault's rupture location wrong for most of Spain except wherever
-  // that default happens to sit.
+  // Kept live from the map's own center (moveend-driven, see DamageMap's
+  // onMapMove -- not per-frame): orders the fault dropdown nearest-first,
+  // and is the fallback reference point for the rare fault without full
+  // rupture geometry (see runFaultScenario).
   const [mapCenter, setMapCenter] = useState({ lat: 40.0, lon: -3.7038 });
+  const faultsByDistance = useMemo(
+    () => (faults ? sortFaultsByDistance(faults, mapCenter) : null),
+    [faults, mapCenter]
+  );
 
   // Mode + manual-mode form state live here (not inside RuptureForm) so a
   // map click (DamageMap) can drive both -- clicking empty space switches
@@ -58,29 +60,15 @@ export default function App() {
     ztorKm: 5,
   });
 
-  // Re-fetched whenever the map's center changes (moveend-driven, see
-  // DamageMap's onMapMove -- not per-frame) so the dropdown (RuptureForm.tsx)
-  // lists faults nearest-first relative to the current view instead of a
-  // fixed reference point. mapCenter starts at this same near-Madrid
-  // default, so the very first fetch already matches it.
-  //
-  // Debounced: `onMapMove` passes a fresh {lat, lon} object on every
-  // `moveend` MapLibre fires, including ones from the map's own initial
-  // camera setup (not just real user pans) -- undebounced, a burst of
-  // those each independently triggered a `/faults` fetch, and against the
-  // deployed Lambda (docs/known-issues-cloud-deploy.md) each one could be
-  // its own multi-second cold start, stacking into a pile of concurrent
-  // requests right after page load. 400ms is short enough to feel
-  // instant after a real pan settles, long enough to collapse a startup
-  // burst into one fetch.
+  // Fetched once: the backend always returns every fault (no location
+  // args), and re-ordering for the current view is local (faultsByDistance
+  // above). The old per-pan refetch was a Lambda round trip -- sometimes a
+  // cold start -- on every map move.
   useEffect(() => {
-    const timeout = setTimeout(() => {
-      listFaults(mapCenter.lat, mapCenter.lon)
-        .then(setFaults)
-        .catch((e) => setFaultsError(e instanceof Error ? e.message : String(e)));
-    }, 400);
-    return () => clearTimeout(timeout);
-  }, [mapCenter]);
+    listFaults()
+      .then(setFaults)
+      .catch((e) => setFaultsError(e instanceof Error ? e.message : String(e)));
+  }, []);
 
   async function runScenario(run: () => Promise<ScenarioResult>) {
     setIsRunning(true);
@@ -112,25 +100,34 @@ export default function App() {
     );
   }
 
-  // Dropdown selection: no click coordinate, so the fault ruptures at the
-  // point on its trace closest to wherever the map currently happens to be
-  // centered.
+  // Fault identity comes from the loaded list (has_rupture_geometry decides
+  // whether a reference point is sent at all, see runFaultScenario). An id
+  // not in the list -- shouldn't happen, both entry points come from it --
+  // is sent with the reference point, which the backend ignores unless it
+  // needs it.
+  function runFault(faultId: string, near: { lat: number; lon: number }) {
+    const fault = faults?.find((f) => f.fault_id === faultId) ?? {
+      fault_id: faultId,
+      has_rupture_geometry: false,
+    };
+    return runScenario(() => runFaultScenario(fault, probabilityLevel, near));
+  }
+
+  // Dropdown selection: no click coordinate, so the map's current center is
+  // the reference point (only used for a fault without rupture geometry).
   function handleFaultSubmit(faultId: string) {
     setSelectedFaultId(faultId);
-    return runScenario(() =>
-      runFaultScenario(faultId, mapCenter.lat, mapCenter.lon, probabilityLevel)
-    );
+    return runFault(faultId, mapCenter);
   }
 
   // Clicking a fault on the map selects *and* runs it immediately, matching
   // MERISUR's "click a fault, get its max-magnitude earthquake" flow more
-  // directly than the sidebar's select-then-press-"Run scenario" two-step --
-  // and, unlike the dropdown, we have the exact clicked point to anchor the
-  // rupture to, which is what actually determines where on the fault's
-  // trace it occurs.
+  // directly than the sidebar's select-then-press-"Run scenario" two-step.
+  // The clicked point is the reference point (again, only used for a fault
+  // without rupture geometry).
   function handleFaultClick(faultId: string, lat: number, lon: number) {
     setSelectedFaultId(faultId);
-    void runScenario(() => runFaultScenario(faultId, lat, lon, probabilityLevel));
+    void runFault(faultId, { lat, lon });
   }
 
   // Clicking anywhere else on the map (DamageMap already excludes fault-line
@@ -169,7 +166,7 @@ export default function App() {
           onModeChange={setMode}
           probabilityLevel={probabilityLevel}
           onProbabilityLevelChange={setProbabilityLevel}
-          faults={faults}
+          faults={faultsByDistance}
           faultsError={faultsError}
           selectedFaultId={selectedFaultId}
           onSelectFault={setSelectedFaultId}
@@ -188,6 +185,7 @@ export default function App() {
             {result.buildings.length.toLocaleString()} damaged, for Mw{" "}
             {result.rupture.mag.toFixed(2)}
             {result.rupture.finite_rupture && " (finite rupture plane)"}
+            {result.cached && " — cached"}
             <br />
             <span style={{ color: "#666" }}>
               {result.rupture.source} — {PROBABILITY_LEVEL_LABELS[result.rupture.probability_level]}
@@ -232,3 +230,29 @@ const STYLE_OF_FAULTING_RAKE: Record<ManualParams["styleOfFaulting"], number> = 
   normal: -90,
   reverse: 90,
 };
+
+// Nearest-first relative to `center`, by each trace's closest *vertex* --
+// an approximation of true point-to-line distance, plenty for ordering a
+// dropdown (QAFI traces are densely digitized). Stable for ties, so equal
+// distances keep the backend's name order.
+function sortFaultsByDistance(faults: Fault[], center: { lat: number; lon: number }): Fault[] {
+  const distance = (fault: Fault) => {
+    const geometry = JSON.parse(fault.geometry_geojson) as
+      | { type: "LineString"; coordinates: number[][] }
+      | { type: "MultiLineString"; coordinates: number[][][] };
+    const vertices = geometry.type === "LineString" ? geometry.coordinates : geometry.coordinates.flat();
+    const cosLat = Math.cos((center.lat * Math.PI) / 180);
+    let best = Infinity;
+    for (const [lon, lat] of vertices) {
+      // Equirectangular, squared -- only compared, never displayed.
+      const dx = (lon - center.lon) * cosLat;
+      const dy = lat - center.lat;
+      best = Math.min(best, dx * dx + dy * dy);
+    }
+    return best;
+  };
+  return faults
+    .map((fault) => ({ fault, d: distance(fault) }))
+    .sort((a, b) => a.d - b.d)
+    .map(({ fault }) => fault);
+}

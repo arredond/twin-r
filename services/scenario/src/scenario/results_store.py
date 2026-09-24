@@ -25,15 +25,14 @@ the tens of milliseconds even at 400k rows. `municipality_stats.json`
 stays uncompressed -- at most ~8,200 municipalities nationwide, small
 regardless of format.
 
-`scenario_id` (minted in local.py/handler.py, not here) is a random UUID4
-for now -- every request gets a fresh id and a fresh directory even if an
-identical rupture/probability_level was already computed. Future: derive
-it instead from a hash of the scenario's actual characteristics (rupture
-params, probability_level) plus the exposure/fragility data version and
-pipeline version, so an identical request naturally lands on the same
-scenario_id and this directory (or its S3 equivalent) can be reused/cached
-rather than recomputed. Not done yet -- noted so the id isn't assumed
-content-addressed before that lands.
+`scenario_id` (minted in local.py, not here) is content-addressed
+(scenario_id.py): an identical request lands on the same directory.
+`response.json.gz` -- the full response payload, always written last, once
+every other file above is in place -- is what marks a directory as a
+complete, reusable result (`read_response`). It's written whether or not
+the scenario cache is on: with the cache off, a rerun overwrites every file
+here in place, so a directory never pairs one run's response with another
+run's buildings.
 """
 
 from __future__ import annotations
@@ -98,3 +97,23 @@ def read_municipality_stats(scenario_id: str) -> list[dict] | None:
     if not path.exists():
         return None
     return json.loads(path.read_text())
+
+
+def write_response(scenario_id: str, payload: dict) -> None:
+    """The full scenario response, for the cache (scenario_id.py). Written
+    on every run, cache on or off (see module docstring). Call last: its presence is what `read_response` treats as "this directory
+    holds a complete result"."""
+    path = scenario_dir(scenario_id) / "response.json.gz"
+    path.write_bytes(gzip.compress(json.dumps(payload).encode("utf-8")))
+
+
+def read_response(scenario_id: str) -> dict | None:
+    """A previously stored full response, or None if there isn't a complete
+    one (never computed, or computed with the cache off). Also None if the
+    tile-join results it depends on have gone missing, so a hit can never
+    hand out a scenario_id whose /tiles/ requests would 404."""
+    d = scenario_dir(scenario_id)
+    path = d / "response.json.gz"
+    if not path.exists() or not (d / "buildings.json.gz").exists():
+        return None
+    return json.loads(gzip.decompress(path.read_bytes()))

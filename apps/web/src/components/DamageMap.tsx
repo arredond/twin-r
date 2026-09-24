@@ -209,12 +209,10 @@ interface Props {
   evaluatedRegion: EvaluatedRegion | null;
   faults: Fault[] | null;
   selectedFaultId: string | null;
-  // lat/lon here is the actual point clicked on the fault trace -- not a
-  // fixed reference point. Matters because the backend places a fault's
-  // rupture at "the point on its trace closest to this reference" (see
-  // scenario/faults.py); for a long fault, a single nationwide default
-  // (e.g. Madrid) can anchor the rupture at the wrong end of the trace
-  // entirely for whichever municipality the user is actually looking at.
+  // lat/lon here is the actual point clicked on the fault trace -- only
+  // used as the rupture's reference point for a fault without full rupture
+  // geometry (see scenarioApi.ts's runFaultScenario); every other fault's
+  // rupture location comes from its own trace.
   onFaultClick: (faultId: string, lat: number, lon: number) => void;
   // Fires for a click anywhere on the map that *didn't* hit a fault line
   // (those go to onFaultClick instead) -- drives manual mode's lat/lon.

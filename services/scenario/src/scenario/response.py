@@ -16,9 +16,18 @@ noticeably shrinks a payload that can otherwise run into the tens of MB.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+import numpy as np
 import pandas as pd
+from pyproj import Geod
 
 from .damage import DAMAGE_STATES
+
+if TYPE_CHECKING:
+    from .rupture import Rupture
+
+_GEOD = Geod(ellps="WGS84")
 
 # A "None"-modal building only ships if its probability margin over the
 # next-most-likely damage state is *this* narrow -- see local.py's own copy
@@ -116,3 +125,38 @@ def compute_municipality_stats(result: pd.DataFrame) -> list[dict]:
             }
         )
     return stats
+
+
+def evaluated_region(rupture: Rupture, radius_km: float) -> dict:
+    """The circle the frontend colors green-by-default within (any
+    building not individually listed in `buildings`), centered on the
+    rupture's own representative point.
+
+    For a finite rupture, buildings are evaluated within `radius_km` of the
+    *whole surface* (engine.py's `_load_sites` pads the surface mesh's
+    extent), not of one point, so the circle's radius grows by the
+    surface's farthest mesh point from the center. Without that, a long
+    fault's circle (centered on its trace midpoint, faults.py's
+    `rupture_anchor`) would leave evaluated buildings near both ends of
+    the trace rendered grey ("never evaluated"). The circle is still an
+    approximation of the true evaluated shape (a padded lon/lat box, always
+    at least as large): a building in the box's corners can be evaluated
+    and omitted as confidently undamaged yet render grey, and for a long,
+    narrow rupture the circle can reach slightly past the box's shorter
+    sides. Both slivers sit at the farthest, least-shaken edge of the
+    region, where "None" and "not evaluated" look the same in practice --
+    not worth a second exact-shape payload to close.
+    """
+    extent_km = 0.0
+    if rupture.surface is not None and rupture.surface.mesh is not None:
+        lons = np.asarray(rupture.surface.mesh.lons).ravel()
+        lats = np.asarray(rupture.surface.mesh.lats).ravel()
+        _, _, dist_m = _GEOD.inv(
+            np.full(lons.shape, rupture.lon), np.full(lats.shape, rupture.lat), lons, lats
+        )
+        extent_km = float(np.max(np.abs(dist_m))) / 1000.0
+    return {
+        "lat": rupture.lat,
+        "lon": rupture.lon,
+        "radius_km": round(radius_km + extent_km, 3),
+    }

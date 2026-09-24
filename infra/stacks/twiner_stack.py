@@ -32,6 +32,15 @@ TILES_SERVICE_DIR = REPO_ROOT / "services" / "tiles"
 # without a CORS error. Update this if the Cloudflare domain changes.
 FRONTEND_ORIGINS = ["https://twiner.arredon.do", "http://localhost:5173"]
 
+# Part of every scenario_id (services/scenario/src/scenario/scenario_id.py),
+# so it's what invalidates the scenario result cache after a data change:
+# **bump it (and `cdk deploy`) whenever anything the scenario function reads
+# from the data bucket is re-uploaded** -- exposure/buildings-cloud/
+# fragility/faults parquet. Any string works; a date keeps it readable.
+# (Calculation-code changes are covered separately, by scenario_id.py's
+# API_VERSION.) See docs/decisions/0018-scenario-result-cache.md.
+DATA_VERSION = "2026-09-24"
+
 
 class TwinerStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
@@ -192,6 +201,12 @@ class TwinerStack(Stack):
                 "TWINER_FAULTS_PATH": f"s3://{data_bucket.bucket_name}/faults/qafi_faults.parquet",
                 "TWINER_MUNICIPALITIES_PATH": f"s3://{data_bucket.bucket_name}/exposure/municipalities.parquet",
                 "TWINER_RESULTS_BUCKET": results_bucket.bucket_name,
+                # Content-addressed scenario cache (ADR-0018): a repeat of
+                # an already-computed scenario returns the stored result
+                # from the results bucket instead of recomputing. Set to
+                # "0" to force every request to recompute.
+                "TWINER_SCENARIO_CACHE": "1",
+                "TWINER_DATA_VERSION": DATA_VERSION,
             },
         )
         data_bucket.grant_read(scenario_fn)

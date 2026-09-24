@@ -24,7 +24,7 @@ Both expose the same four routes:
 |---|---|---|
 | `POST /scenarios/manual` | manual rupture (lat/lon/mag/...) | full response below |
 | `GET /scenarios/fault` | pick a QAFI fault by id | full response below |
-| `GET /faults` | list nearby faults (sidebar dropdown) | `Fault[]`, nearest-first |
+| `GET /faults` | every fault, no args (sidebar dropdown + map layer) | `Fault[]`, by name (frontend sorts nearest-first) |
 | `GET /buildings/{id}` | one building's static attributes | popup extras |
 
 ### The scenario response shape
@@ -153,13 +153,14 @@ actually looking.
    download (gzip helps network size, not client CPU) and the
    `setFeatureState` volume scale with the *evaluated region*, not the
    *visible* one. This is the direct cause of the reported zoom lag.
-2. **No caching, despite `"automatic"` mode being close to deterministic.**
-   `runFaultScenario`'s own doc comment already notes `fault_id` +
-   `near_lat`/`near_lon` fully determine the rupture (QAFI supplies
-   mmax/geometry/dip/rake); combined with `probability_level`, the same
-   triple always produces the same result. Nothing memoizes this --
-   picking the same fault/probability-level twice recomputes and
-   re-downloads the full payload both times.
+2. ~~**No caching, despite `"automatic"` mode being close to
+   deterministic.**~~ Addressed by ADR-0018: scenario ids are now
+   content-addressed (inputs + API/data version), `fault_id` +
+   `probability_level` alone determine an automatic-mode result, and the
+   backend serves a stored result on a repeat when
+   `TWINER_SCENARIO_CACHE` is on (the deployed default). The payload is
+   still re-downloaded in full on a hit; see ADR-0018's CloudFront
+   evaluation for taking that off the Lambda too.
 3. **Deployed (Lambda) path returns a shape the frontend can't read.**
    `infra/stacks/twiner_stack.py` always sets `TWINER_RESULTS_BUCKET`, so
    `handler.py`'s `RESULTS_BUCKET is None` branch is dead in the deployed

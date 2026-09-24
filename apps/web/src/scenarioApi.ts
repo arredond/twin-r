@@ -42,9 +42,11 @@ export interface Fault {
   mmax: number;
   mmax_source: string;
   length_km: number;
-  lat: number;
-  lon: number;
-  distance_km: number;
+  // Trace + dip + depth range all present in QAFI, i.e. the backend builds
+  // a finite rupture surface for it (ADR-0007) and the rupture's location
+  // comes from the fault's own geometry. Only when this is false does
+  // runFaultScenario's `near` point matter (point-source fallback).
+  has_rupture_geometry: boolean;
   geometry_geojson: string; // GeoJSON (Multi)LineString, parse before use
 }
 
@@ -108,6 +110,10 @@ export interface ScenarioResult {
     probability_level: ProbabilityLevel;
   };
   evaluated_region: EvaluatedRegion;
+  // True when the backend served a stored result for this exact request
+  // (content-addressed scenario_id, services/scenario/scenario_id.py)
+  // instead of recomputing it.
+  cached?: boolean;
   // Only buildings that are actually damaged, or "None"-modal but still a
   // genuine close call against the runner-up damage state (margin under
   // UNCERTAINTY_MARGIN) -- everything else is deliberately left out
@@ -132,12 +138,14 @@ export interface ScenarioResult {
 // returns the ScenarioResult inline -- so this has to handle both shapes.
 async function resolveScenarioResult(body: unknown): Promise<ScenarioResult> {
   if (body && typeof body === "object" && "result_url" in body) {
-    const resultUrl = (body as { result_url: string }).result_url;
+    const { result_url: resultUrl, cached } = body as { result_url: string; cached?: boolean };
     const resp = await fetch(resultUrl);
     if (!resp.ok) {
       throw new Error(`fetching scenario result failed (${resp.status}): ${await resp.text()}`);
     }
-    return resp.json();
+    // The stored payload is the same object whether this request computed
+    // it or hit the cache -- only the wrapper knows which.
+    return { ...(await resp.json()), cached };
   }
   return body as ScenarioResult;
 }
@@ -170,52 +178,33 @@ export function runManualScenario(req: ManualRuptureRequest): Promise<ScenarioRe
 }
 
 // "Automatic" mode (docs/merisur.md §4.1): pick a QAFI fault, run its
-// maximum-magnitude earthquake. A GET -- unlike manual mode, mmax/geometry/
-// dip/rake all come from QAFI (fault_id alone fully determines the
-// evaluated buildings, see services/scenario/local.py's docstring on this
-// route); nearLat/nearLon only anchor *which point on the fault's trace*
-// gets echoed back for display (backend: "closest point to this
-// reference" -- see scenario/faults.py) -- always pass the user's actual
-// point of interest (map click, or current view center), never a fixed
-// default: a long fault's closest-to-Madrid point can be a poor stand-in
-// for its closest point to wherever the user is actually looking.
+// maximum-magnitude earthquake. A GET: mmax/geometry/dip/rake -- and the
+// rupture's own location, its trace midpoint -- all come from QAFI, so
+// fault_id + probabilityLevel fully determine the result, which is what
+// lets the backend cache it (services/scenario/scenario_id.py).
+//
+// `near` is only sent for a fault *without* full rupture geometry
+// (`has_rupture_geometry` false), where the backend falls back to a point
+// source at the trace point closest to it. Sending it for any other fault
+// would be ignored anyway, but leaving it out keeps the request URL (and
+// any HTTP cache in front of it) identical regardless of map view.
 export function runFaultScenario(
-  faultId: string,
-  nearLat: number,
-  nearLon: number,
-  probabilityLevel: ProbabilityLevel = "high"
+  fault: Pick<Fault, "fault_id" | "has_rupture_geometry">,
+  probabilityLevel: ProbabilityLevel = "high",
+  near?: { lat: number; lon: number }
 ): Promise<ScenarioResult> {
   return getScenario("/scenarios/fault", {
-    fault_id: faultId,
-    near_lat: nearLat,
-    near_lon: nearLon,
+    fault_id: fault.fault_id,
     probability_level: probabilityLevel,
+    ...(!fault.has_rupture_geometry && near ? { near_lat: near.lat, near_lon: near.lon } : {}),
   });
 }
 
-// 3000km comfortably covers all of Spain regardless of reference point --
-// QAFI only has 201 faults nationwide (see local.py's /faults docstring),
-// so there's no volume reason to restrict this; a smaller radius here was
-// a leftover from when the app defaulted to a Lorca-centered view and
-// silently produced zero results once the default reference point moved
-// away from any nearby fault (found: 0 faults within 150km of Madrid).
-//
-// nearLat/nearLon: same "distance from the user's actual point of
-// interest, never a fixed default" rule as runFaultScenario above -- it's
-// what orders the returned list nearest-first (RuptureForm.tsx's dropdown
-// doesn't display the distance itself, just benefits from the ordering).
-// Omitting these previously left the backend's own Madrid default in
-// place regardless of where the map was actually centered, so every
-// session's dropdown was quietly ordered around Madrid no matter what the
-// user was looking at -- always pass the caller's current map center.
-export async function listFaults(
-  nearLat: number,
-  nearLon: number,
-  radiusKm = 3000
-): Promise<Fault[]> {
-  const resp = await fetch(
-    `${API_URL}/faults?lat=${nearLat}&lon=${nearLon}&radius_km=${radiusKm}`
-  );
+// Every fault in the dataset (QAFI v4: 201 nationwide), sorted by name --
+// small enough to load once. Ordering relative to the map view happens
+// client-side (App.tsx's sortFaultsByDistance), not by refetching.
+export async function listFaults(): Promise<Fault[]> {
+  const resp = await fetch(`${API_URL}/faults`);
   if (!resp.ok) {
     const detail = await resp.text();
     throw new Error(`faults request failed (${resp.status}): ${detail}`);

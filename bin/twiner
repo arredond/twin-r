@@ -33,6 +33,15 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${TWINER_BUILDINGS_PATH:=data/exposure/parts/*.buildings.parquet}"
 : "${TWINER_EXPOSURE_PATH:=data/exposure/exposure.parquet}"
 
+# Scenario result cache (docs/decisions/0018-scenario-result-cache.md): off
+# by default locally, so every run recomputes against whatever calculation
+# code/data you currently have. Opt in to test the cache itself, e.g.:
+#   TWINER_SCENARIO_CACHE=1 twiner start
+# With it on, bump TWINER_DATA_VERSION after rebuilding local data, or old
+# results under results/ keep being served.
+: "${TWINER_SCENARIO_CACHE:=0}"
+: "${TWINER_DATA_VERSION:=dev}"
+
 # The deployed Lambda Function URLs (infra's `ScenarioFunctionUrl`/
 # `TilesFunctionUrl` CDK outputs, docs/deploy-aws-setup.md step 7/9) --
 # override if you've deployed your own stack/account, e.g.:
@@ -42,7 +51,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${TWINER_PROD_SCENARIO_API_URL:=https://naw44z44znff5je2ohuyyai7ce0gwpiu.lambda-url.eu-south-2.on.aws/}"
 : "${TWINER_PROD_TILES_API_URL:=}"
 
-API_CMD="cd '$REPO_ROOT' && TWINER_BUILDINGS_PATH='$TWINER_BUILDINGS_PATH' TWINER_EXPOSURE_PATH='$TWINER_EXPOSURE_PATH' uv run --package twiner-scenario uvicorn scenario.local:app --port 8000 --reload"
+API_CMD="cd '$REPO_ROOT' && TWINER_BUILDINGS_PATH='$TWINER_BUILDINGS_PATH' TWINER_EXPOSURE_PATH='$TWINER_EXPOSURE_PATH' TWINER_SCENARIO_CACHE='$TWINER_SCENARIO_CACHE' TWINER_DATA_VERSION='$TWINER_DATA_VERSION' uv run --package twiner-scenario uvicorn scenario.local:app --port 8000 --reload"
 WEB_CMD_LOCAL="cd '$REPO_ROOT/apps/web' && npm run dev -- --port 5173"
 # VITE_SCENARIO_API_URL/VITE_TILES_API_URL set here always win over
 # apps/web/.env* files (Vite: process.env takes priority over .env-file

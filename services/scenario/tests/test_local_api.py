@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import geopandas as gpd
@@ -75,6 +76,10 @@ def data_dir(tmp_path: Path) -> Path:
             "bbox_ymin": [NEAR_LAT, NEAR_LAT, FAR_LAT],
             "bbox_xmax": [NEAR_LON, NEAR_LON, FAR_LON],
             "bbox_ymax": [NEAR_LAT, NEAR_LAT, FAR_LAT],
+            # ADR-0015's per-building Vs30, at ground_motion.DEFAULT_VS30 --
+            # the flat reference-rock value every probability quoted in the
+            # tests below was verified against, before this column existed.
+            "vs30": [800.0, 800.0, 800.0],
             "geometry": [
                 _square(NEAR_LON, NEAR_LAT),
                 _square(NEAR_LON + 0.001, NEAR_LAT + 0.001),
@@ -121,20 +126,25 @@ def data_dir(tmp_path: Path) -> Path:
                     )
     fragility = pd.DataFrame(fragility_rows)
 
+    # TEST002 has no dip/depth range -- the "missing rupture geometry" case
+    # (point-source fallback) where near_lat/near_lon genuinely matter.
     faults = gpd.GeoDataFrame(
         {
-            "fault_id": ["TEST001"],
-            "name": ["Test Fault"],
-            "section_name": [None],
-            "length_km": [30.0],
-            "mmax": [6.5],
-            "mmax_source": ["qafi_v4_published"],
-            "rake": [20.0],
-            "dip": [70.0],
-            "strike": [215.0],
-            "min_depth_km": [0.0],
-            "max_depth_km": [12.0],
-            "geometry": [LineString([(NEAR_LON - 0.05, NEAR_LAT), (NEAR_LON + 0.05, NEAR_LAT)])],
+            "fault_id": ["TEST001", "TEST002"],
+            "name": ["Test Fault", "Another Test Fault"],
+            "section_name": [None, None],
+            "length_km": [30.0, 30.0],
+            "mmax": [6.5, 6.5],
+            "mmax_source": ["qafi_v4_published", "qafi_v4_published"],
+            "rake": [20.0, 20.0],
+            "dip": [70.0, None],
+            "strike": [215.0, 215.0],
+            "min_depth_km": [0.0, None],
+            "max_depth_km": [12.0, None],
+            "geometry": [
+                LineString([(NEAR_LON - 0.05, NEAR_LAT), (NEAR_LON + 0.05, NEAR_LAT)]),
+                LineString([(NEAR_LON - 0.05, NEAR_LAT), (NEAR_LON + 0.05, NEAR_LAT)]),
+            ],
         },
         crs="EPSG:4326",
     )
@@ -155,9 +165,18 @@ def data_dir(tmp_path: Path) -> Path:
     return d
 
 
-@pytest.fixture
-def client(data_dir: Path, monkeypatch: pytest.MonkeyPatch):
+def _make_client(data_dir: Path, results_dir: Path, monkeypatch: pytest.MonkeyPatch, cache: bool):
     monkeypatch.setenv("TWINER_DATA_DIR", str(data_dir))
+    # Env (for the tile pool's worker processes, which re-import) *and*
+    # the already-imported module global (for this process).
+    monkeypatch.setenv("TWINER_RESULTS_DIR", str(results_dir))
+    from scenario import results_store
+
+    monkeypatch.setattr(results_store, "RESULTS_DIR", results_dir)
+    if cache:
+        monkeypatch.setenv("TWINER_SCENARIO_CACHE", "1")
+    else:
+        monkeypatch.delenv("TWINER_SCENARIO_CACHE", raising=False)
     monkeypatch.delenv("TWINER_BUILDINGS_PATH", raising=False)
     monkeypatch.delenv("TWINER_EXPOSURE_PATH", raising=False)
     monkeypatch.delenv("TWINER_FRAGILITY_PATH", raising=False)
@@ -167,10 +186,40 @@ def client(data_dir: Path, monkeypatch: pytest.MonkeyPatch):
 
     importlib.reload(local)  # re-read module-level path constants from the env above
 
+    # Every reload builds a fresh module-level ProcessPoolExecutor, and
+    # every scenario run submits warm_cache to it -- spawning up to 8
+    # worker processes (each importing pandas/pyarrow) per test, none ever
+    # shut down, which the interpreter then joins one by one at exit
+    # (measured: 15s of tests, ~15min to exit). Nothing here requests
+    # /tiles, so a single thread stands in for the pool -- warm_cache
+    # still runs (and harmlessly fails on the fixture's missing
+    # buildings.pmtiles), but no processes are spawned.
+    local._TILE_POOL.shutdown(wait=False)
+    monkeypatch.setattr(local, "_TILE_POOL", ThreadPoolExecutor(max_workers=1))
+
     from starlette.testclient import TestClient
 
-    with TestClient(local.app) as c:
+    return TestClient(local.app)
+
+
+@pytest.fixture
+def client(data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    with _make_client(data_dir, tmp_path / "results", monkeypatch, cache=False) as c:
         yield c
+    _shutdown_tile_pool()
+
+
+@pytest.fixture
+def cached_client(data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    with _make_client(data_dir, tmp_path / "results", monkeypatch, cache=True) as c:
+        yield c
+    _shutdown_tile_pool()
+
+
+def _shutdown_tile_pool() -> None:
+    from scenario import local
+
+    local._TILE_POOL.shutdown(wait=True, cancel_futures=True)
 
 
 def test_health(client):
@@ -179,22 +228,17 @@ def test_health(client):
     assert resp.json() == {"status": "ok"}
 
 
-def test_faults_endpoint_returns_the_synthetic_fault(client):
-    resp = client.get("/faults", params={"lat": NEAR_LAT, "lon": NEAR_LON, "radius_km": 100})
+def test_faults_endpoint_returns_every_fault_sorted_by_name(client):
+    # No location/radius args any more -- the old ones were how this
+    # project once silently got zero faults back (a too-small radius from
+    # an unrelated reference point).
+    resp = client.get("/faults")
     assert resp.status_code == 200
     faults = resp.json()["faults"]
-    assert len(faults) == 1
-    assert faults[0]["fault_id"] == "TEST001"
-    assert faults[0]["distance_km"] < 10
-
-
-def test_faults_endpoint_respects_radius(client):
-    # Regression check for the real bug this project hit: a too-small
-    # radius from an unrelated reference point silently returns zero
-    # faults instead of erroring.
-    resp = client.get("/faults", params={"lat": 0.0, "lon": 0.0, "radius_km": 1})
-    assert resp.status_code == 200
-    assert resp.json()["faults"] == []
+    assert [f["fault_id"] for f in faults] == ["TEST002", "TEST001"]
+    by_id = {f["fault_id"]: f for f in faults}
+    assert by_id["TEST001"]["has_rupture_geometry"] is True
+    assert by_id["TEST002"]["has_rupture_geometry"] is False
 
 
 def test_manual_scenario_evaluates_only_nearby_buildings(client):
@@ -330,8 +374,6 @@ def test_fault_scenario_accepts_probability_level(client):
         "/scenarios/fault",
         params={
             "fault_id": "TEST001",
-            "near_lat": NEAR_LAT,
-            "near_lon": NEAR_LON,
             "probability_level": "low",
         },
     )
@@ -364,20 +406,118 @@ def test_manual_scenario_with_full_geometry_uses_a_finite_surface(client):
 
 
 def test_fault_scenario_runs_end_to_end(client):
-    resp = client.get(
-        "/scenarios/fault",
-        params={"fault_id": "TEST001", "near_lat": NEAR_LAT, "near_lon": NEAR_LON},
-    )
+    resp = client.get("/scenarios/fault", params={"fault_id": "TEST001"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["rupture"]["source"] == "fault:TEST001:Test Fault"
     assert body["rupture"]["mag"] == 6.5
+    assert body["rupture"]["finite_rupture"] is True
+    assert body["cached"] is False
+
+
+def test_fault_with_geometry_anchors_at_trace_midpoint_and_ignores_near_point(client):
+    # The trace runs east-west through (NEAR_LAT, NEAR_LON), which is its
+    # midpoint. A far-off near point must change nothing: not the rupture
+    # point, not the evaluated circle, not the scenario_id.
+    plain = client.get("/scenarios/fault", params={"fault_id": "TEST001"}).json()
+    with_near = client.get(
+        "/scenarios/fault",
+        params={"fault_id": "TEST001", "near_lat": 38.5, "near_lon": -1.0},
+    ).json()
+    assert plain["rupture"]["lat"] == pytest.approx(NEAR_LAT, abs=1e-4)
+    assert plain["rupture"]["lon"] == pytest.approx(NEAR_LON, abs=1e-4)
+    assert with_near["scenario_id"] == plain["scenario_id"]
+    assert with_near["rupture"] == plain["rupture"]
+    assert with_near["evaluated_region"] == plain["evaluated_region"]
+
+
+def test_finite_rupture_evaluated_region_covers_the_whole_surface(client):
+    # The significance radius is measured from the surface, so the display
+    # circle around the midpoint has to reach past each end of the ~9km
+    # trace, not stop at the bare radius.
+    body = client.get("/scenarios/fault", params={"fault_id": "TEST001"}).json()
+    point = client.post(
+        "/scenarios/manual", json={"lat": NEAR_LAT, "lon": NEAR_LON, "mag": 6.5, "rake": 20.0}
+    ).json()
+    assert body["evaluated_region"]["radius_km"] > point["evaluated_region"]["radius_km"] + 4
+
+
+def test_fault_without_geometry_uses_near_point_when_given(client):
+    east = client.get(
+        "/scenarios/fault",
+        params={"fault_id": "TEST002", "near_lat": NEAR_LAT + 0.2, "near_lon": NEAR_LON + 0.04},
+    ).json()
+    west = client.get(
+        "/scenarios/fault",
+        params={"fault_id": "TEST002", "near_lat": NEAR_LAT + 0.2, "near_lon": NEAR_LON - 0.04},
+    ).json()
+    assert east["rupture"]["finite_rupture"] is False
+    # Closest trace point to each reference: same latitude as the trace,
+    # longitude right below the reference point.
+    assert east["rupture"]["lon"] == pytest.approx(NEAR_LON + 0.04, abs=1e-4)
+    assert west["rupture"]["lon"] == pytest.approx(NEAR_LON - 0.04, abs=1e-4)
+    assert east["scenario_id"] != west["scenario_id"]
+
+
+def test_fault_without_geometry_or_near_point_falls_back_to_trace_midpoint(client):
+    body = client.get("/scenarios/fault", params={"fault_id": "TEST002"}).json()
+    assert body["rupture"]["finite_rupture"] is False
+    assert body["rupture"]["lat"] == pytest.approx(NEAR_LAT, abs=1e-4)
+    assert body["rupture"]["lon"] == pytest.approx(NEAR_LON, abs=1e-4)
+
+
+def test_scenario_ids_are_deterministic_and_input_sensitive(client):
+    a = client.get("/scenarios/fault", params={"fault_id": "TEST001"}).json()["scenario_id"]
+    b = client.get("/scenarios/fault", params={"fault_id": "TEST001"}).json()["scenario_id"]
+    low = client.get(
+        "/scenarios/fault", params={"fault_id": "TEST001", "probability_level": "low"}
+    ).json()["scenario_id"]
+    assert a == b
+    assert a != low
+
+
+def test_cache_disabled_always_recomputes(client):
+    first = client.get("/scenarios/fault", params={"fault_id": "TEST001"}).json()
+    second = client.get("/scenarios/fault", params={"fault_id": "TEST001"}).json()
+    assert first["cached"] is False
+    assert second["cached"] is False
+
+
+def test_cache_enabled_serves_an_identical_repeat_from_the_stored_result(cached_client):
+    first = cached_client.get("/scenarios/fault", params={"fault_id": "TEST001"}).json()
+    second = cached_client.get("/scenarios/fault", params={"fault_id": "TEST001"}).json()
+    assert first["cached"] is False
+    assert second["cached"] is True
+    for key in ["scenario_id", "rupture", "evaluated_region", "buildings", "municipality_stats"]:
+        assert second[key] == first[key]
+    # Still a valid tile-join target after a hit.
+    status = cached_client.get(f"/results/{second['scenario_id']}/status").json()
+    assert status["buildings_ready"] is True
+
+
+def test_cache_is_invalidated_by_a_data_version_bump(
+    cached_client, monkeypatch: pytest.MonkeyPatch
+):
+    first = cached_client.get("/scenarios/fault", params={"fault_id": "TEST001"}).json()
+    monkeypatch.setenv("TWINER_DATA_VERSION", "next")
+    second = cached_client.get("/scenarios/fault", params={"fault_id": "TEST001"}).json()
+    assert second["scenario_id"] != first["scenario_id"]
+    assert second["cached"] is False
+
+
+def test_manual_scenario_is_cached_too(cached_client):
+    req = {"lat": NEAR_LAT, "lon": NEAR_LON, "mag": 6.5, "rake": 20.0}
+    first = cached_client.post("/scenarios/manual", json=req).json()
+    second = cached_client.post("/scenarios/manual", json=req).json()
+    other = cached_client.post("/scenarios/manual", json={**req, "mag": 6.4}).json()
+    assert (first["cached"], second["cached"], other["cached"]) == (False, True, False)
+    assert second["scenario_id"] == first["scenario_id"] != other["scenario_id"]
 
 
 def test_fault_scenario_unknown_id_returns_404(client):
     resp = client.get(
         "/scenarios/fault",
-        params={"fault_id": "NOT-A-REAL-FAULT", "near_lat": NEAR_LAT, "near_lon": NEAR_LON},
+        params={"fault_id": "NOT-A-REAL-FAULT"},
     )
     assert resp.status_code == 404
 
@@ -438,9 +578,7 @@ def test_municipality_stats_agree_with_which_buildings_are_shipped_individually(
 
 
 def test_faults_endpoint_completes_quickly(client):
-    _timed(
-        lambda: client.get("/faults", params={"lat": NEAR_LAT, "lon": NEAR_LON, "radius_km": 100})
-    )
+    _timed(lambda: client.get("/faults"))
 
 
 def test_manual_scenario_completes_quickly(client):
@@ -456,7 +594,7 @@ def test_fault_scenario_completes_quickly(client):
     resp = _timed(
         lambda: client.get(
             "/scenarios/fault",
-            params={"fault_id": "TEST001", "near_lat": NEAR_LAT, "near_lon": NEAR_LON},
+            params={"fault_id": "TEST001"},
         )
     )
     assert resp.status_code == 200
