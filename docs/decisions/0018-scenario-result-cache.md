@@ -82,7 +82,8 @@ hex characters of a SHA-256 over canonical JSON of:
   data the scenario function reads is re-uploaded.**
 
 A version bump changes every id, so older results are never looked up
-again. They age out under the results bucket's 30-day lifecycle rule.
+again. They age out under the results bucket's lifecycle rule (30 days
+originally, 365 since `bin/warm-scenario-cache` -- see Consequences).
 Nothing needs deleting.
 
 **The backend checks for a stored result before computing**, when
@@ -127,12 +128,21 @@ cloud, set the Lambda's env var to `0`.
 
 - **Two manual steps now guard cache correctness**: bump `API_VERSION`
   on calculation changes, and `DATA_VERSION` on data uploads. Forgetting
-  either serves stale results for up to 30 days (or until the next bump).
+  either serves stale results until the next bump or the lifecycle
+  expiry, now 365 days.
 - Measured locally for ES626 (1.67M evaluated, 19,878 shipped): 2.09s to
   compute, 0.16s for the cache hit (wall time through the FastAPI app).
   Deployed, the saving is the whole 12-33s compute. A hit still costs a
   Lambda invocation (cold start included), a HEAD and a presign (a GET
   since ADR-0019).
+- **Pre-populating**: `bin/warm-scenario-cache` requests every fault x
+  probability level (603 scenarios for QAFI v4) against a scenario API,
+  with bounded concurrency and retries. Run it after any deploy that bumps
+  either version. Estimated from a month of CloudWatch billed durations
+  (warm computes 2-19s, cold starts 50-120s, at 3,008MB): roughly
+  18,000-35,000 GB-s per full sweep, well under $1, and ~15-25 minutes at
+  concurrency 8-10. To keep a full cache from expiring monthly, the
+  results bucket's lifecycle went from 30 to 365 days.
 - **Existing nondeterminism, surfaced by the check above, not fixed
   here**: `compute_intensity_gridded` takes each 1 km cell's Vs30 from
   its *first* row (`first_index`), and DuckDB doesn't guarantee row order.

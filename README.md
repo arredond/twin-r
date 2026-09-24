@@ -92,6 +92,8 @@ The deployed stack has it on. Bump `API_VERSION` in
 `services/scenario/src/scenario/scenario_id.py` whenever a change could
 alter scenario results, and `DATA_VERSION` in
 `infra/stacks/twiner_stack.py` whenever you upload new data.
+After either bump and a deploy, `bin/warm-scenario-cache` pre-computes every
+fault x probability level against the deployed API.
 
 ## Working in multiple worktrees
 

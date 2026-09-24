@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""warm-scenario-cache: pre-populate the scenario result cache (ADR-0018)
+by requesting every fault at every probability level from a scenario API.
+
+Usage:
+  bin/warm-scenario-cache [--api-url URL] [--concurrency N] [--levels L,...]
+                          [--faults ID,...] [--retries N] [--timeout S] [--dry-run]
+
+--api-url defaults to $TWINER_SCENARIO_API_URL, then to the deployed
+Function URL bin/twiner uses for `twiner start prod`. Point it at
+http://localhost:8000 to exercise a local stack started with
+`TWINER_SCENARIO_CACHE=1 twiner start` -- local caching is off by default,
+so without that every request just recomputes.
+
+Run it after a deploy that bumps API_VERSION (services/scenario/src/
+scenario/scenario_id.py) or DATA_VERSION (infra/stacks/twiner_stack.py):
+either bump changes every scenario_id, so the cache starts empty. A rerun
+on an already-warm cache is cheap -- every request comes back `cached` in
+well under a second, no compute.
+
+Each scenario is a plain GET /scenarios/fault?fault_id=..&probability_level=..,
+exactly what the frontend sends, so it lands on the same scenario_id. Faults
+without full rupture geometry (`has_rupture_geometry` false in /faults) are
+skipped: their result depends on the user's map position (near_lat/
+near_lon), so there's no single entry to pre-compute. None of QAFI v4's
+faults are like that today.
+
+Stdlib only, so it runs with any python3 -- no uv/venv needed.
+Exits non-zero if any scenario still failed after its retries.
+"""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Kept in sync with bin/twiner's TWINER_PROD_SCENARIO_API_URL default.
+DEFAULT_PROD_API_URL = "https://naw44z44znff5je2ohuyyai7ce0gwpiu.lambda-url.eu-south-2.on.aws/"
+LEVELS = ("high", "low", "very_low")
+
+
+def fetch_json(url: str, timeout: float) -> dict:
+    # The Lambda always gzips its body (handler.py's _response) and urllib
+    # doesn't decode Content-Encoding itself.
+    req = urllib.request.Request(url, headers={"Accept-Encoding": "gzip"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = resp.read()
+        if resp.headers.get("Content-Encoding") == "gzip":
+            body = gzip.decompress(body)
+        return json.loads(body)
+
+
+def warm_one(api_url: str, fault_id: str, level: str, retries: int, timeout: float) -> dict:
+    query = urllib.parse.urlencode({"fault_id": fault_id, "probability_level": level})
+    url = f"{api_url}/scenarios/fault?{query}"
+    error = None
+    for attempt in range(1, retries + 2):
+        t0 = time.monotonic()
+        try:
+            body = fetch_json(url, timeout)
+            return {
+                "fault_id": fault_id,
+                "level": level,
+                "ok": True,
+                "cached": bool(body.get("cached")),
+                "seconds": time.monotonic() - t0,
+                "attempts": attempt,
+                "n_evaluated": body.get("n_evaluated"),
+            }
+        except urllib.error.HTTPError as e:
+            error = f"HTTP {e.code}: {e.read()[:200]!r}"
+            # A 4xx won't get better by retrying (bad fault_id/level); a
+            # 5xx/502 is usually a Lambda timeout or cold-start hiccup.
+            if e.code < 500:
+                break
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            error = f"{type(e).__name__}: {e}"
+    return {"fault_id": fault_id, "level": level, "ok": False, "error": error, "attempts": attempt}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Pre-populate the scenario result cache: every fault x probability level."
+    )
+    parser.add_argument(
+        "--api-url",
+        default=os.environ.get("TWINER_SCENARIO_API_URL", DEFAULT_PROD_API_URL),
+        help="scenario API base URL (default: $TWINER_SCENARIO_API_URL, else the deployed one)",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=8,
+        help="requests in flight at once (default 8; each is a 3GB Lambda compute on a miss)",
+    )
+    parser.add_argument(
+        "--levels", default=",".join(LEVELS), help=f"comma-separated subset of {LEVELS}"
+    )
+    parser.add_argument("--faults", help="comma-separated fault_ids (default: every fault)")
+    parser.add_argument(
+        "--retries", type=int, default=2, help="retries per scenario on 5xx/timeouts (default 2)"
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=150,
+        help="per-request timeout in seconds (default 150, above the Lambda's own 120s)",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="list what would run, then exit")
+    args = parser.parse_args()
+
+    if args.retries < 0 or args.concurrency < 1:
+        parser.error("--retries must be >= 0 and --concurrency >= 1")
+    api_url = args.api_url.rstrip("/")
+    levels = [lvl.strip() for lvl in args.levels.split(",") if lvl.strip()]
+    if unknown := set(levels) - set(LEVELS):
+        parser.error(f"unknown probability level(s): {sorted(unknown)}")
+
+    faults = fetch_json(f"{api_url}/faults", args.timeout)["faults"]
+    if args.faults:
+        wanted = {f.strip() for f in args.faults.split(",")}
+        if missing := wanted - {f["fault_id"] for f in faults}:
+            parser.error(f"fault_id(s) not in /faults: {sorted(missing)}")
+        faults = [f for f in faults if f["fault_id"] in wanted]
+    skipped = [f["fault_id"] for f in faults if not f.get("has_rupture_geometry", True)]
+    faults = [f for f in faults if f.get("has_rupture_geometry", True)]
+
+    jobs = [(f["fault_id"], lvl) for f in faults for lvl in levels]
+    print(
+        f"{api_url}: {len(faults)} faults x {len(levels)} levels = {len(jobs)} scenarios, "
+        f"concurrency {args.concurrency}"
+        + (f"; skipping {len(skipped)} without rupture geometry: {skipped}" if skipped else "")
+    )
+    if args.dry_run:
+        for fault_id, lvl in jobs:
+            print(f"  {fault_id} {lvl}")
+        return 0
+
+    t_start = time.monotonic()
+    results = []
+    with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+        futures = [
+            pool.submit(warm_one, api_url, fid, lvl, args.retries, args.timeout)
+            for fid, lvl in jobs
+        ]
+        for i, fut in enumerate(as_completed(futures), 1):
+            r = fut.result()
+            results.append(r)
+            if r["ok"]:
+                status = "cached  " if r["cached"] else "computed"
+                extra = f" (attempt {r['attempts']})" if r["attempts"] > 1 else ""
+                print(
+                    f"[{i}/{len(jobs)}] {status} {r['fault_id']:>8} {r['level']:<8} "
+                    f"{r['seconds']:6.1f}s{extra}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[{i}/{len(jobs)}] FAILED   {r['fault_id']:>8} {r['level']:<8} "
+                    f"after {r['attempts']} attempt(s): {r['error']}",
+                    flush=True,
+                )
+
+    ok = [r for r in results if r["ok"]]
+    computed = [r for r in ok if not r["cached"]]
+    failed = [r for r in results if not r["ok"]]
+    compute_s = sum(r["seconds"] for r in computed)
+    print(
+        f"\ndone in {time.monotonic() - t_start:.0f}s: {len(computed)} computed "
+        f"({compute_s:.0f}s total request time), {len(ok) - len(computed)} already cached, "
+        f"{len(failed)} failed"
+    )
+    for r in failed:
+        print(f"  failed: {r['fault_id']} {r['level']}: {r['error']}")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

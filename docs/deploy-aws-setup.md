@@ -192,3 +192,16 @@ the scenario result cache from ADR-0018.)
 `DATA_VERSION` in `infra/stacks/twiner_stack.py` and `cdk deploy`, or the
 scenario cache keeps serving results computed from the old data -- see
 ADR-0018.
+
+**Warming the cache** (optional, after any deploy that bumps
+`API_VERSION` or `DATA_VERSION` -- either one empties the cache):
+
+```
+bin/warm-scenario-cache --api-url <ScenarioFunctionUrl>
+```
+
+Requests all 201 faults x 3 probability levels (603 scenarios) at
+concurrency 8. Roughly 15-25 minutes and well under $1 of Lambda time
+(ADR-0018). Safe to rerun: already-cached scenarios return in well under a
+second. `--dry-run`, `--faults`, `--levels` and `--concurrency` narrow or
+throttle it; see `--help`.

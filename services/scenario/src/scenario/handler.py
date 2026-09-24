@@ -170,7 +170,7 @@ def _cached_response(scenario_id: str) -> dict | None:
     built, so a hit never pays for engine/hazardlib's import or any
     compute. `response.json` is written last in `_run_and_respond` (after
     the tile-join results), so its presence implies the tiles Lambda can
-    serve this id too; both expire together under ResultsBucket's 30-day
+    serve this id too; both expire together under ResultsBucket's
     lifecycle rule, which doubles as the cache's TTL."""
     if not cache_enabled() or RESULTS_BUCKET is None:
         return None

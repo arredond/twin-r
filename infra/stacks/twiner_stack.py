@@ -97,7 +97,16 @@ class TwinerStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-            lifecycle_rules=[s3.LifecycleRule(expiration=Duration.days(30))],
+            # A year, not the original 30 days: the bucket doubles as the
+            # scenario result cache (ADR-0018), which bin/warm-scenario-cache
+            # fills for every fault x probability level, and a monthly
+            # expiry would silently empty it. Correctness doesn't depend on
+            # expiry (scenario_ids change whenever API_VERSION or
+            # DATA_VERSION does, orphaning old entries), and storage stays
+            # small (a full sweep is ~0.1-1.3GB). The flip side: a
+            # *forgotten* version bump now serves stale results for up to
+            # a year instead of a month.
+            lifecycle_rules=[s3.LifecycleRule(expiration=Duration.days(365))],
             # Private and backend-only: written by scenario_fn, read by
             # scenario_fn (the scenario cache) and tiles_fn (the tile
             # joins). The browser never reads it -- no public policy, no
