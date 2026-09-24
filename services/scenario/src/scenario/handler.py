@@ -32,6 +32,7 @@ import os
 import re
 import time
 
+from . import numba_cache
 from .building_lookup import get_building
 from .faults import get_fault, load_faults, round_near_point, rupture_anchor
 from .probability_level import resolve_probability_level
@@ -49,6 +50,12 @@ EXPOSURE_PATH = os.environ.get("TWINER_EXPOSURE_PATH", "data/exposure/exposure.p
 FRAGILITY_PATH = os.environ.get("TWINER_FRAGILITY_PATH", "data/fragility/fragility.parquet")
 FAULTS_PATH = os.environ.get("TWINER_FAULTS_PATH", "data/faults/qafi_faults.parquet")
 RESULTS_BUCKET = os.environ.get("TWINER_RESULTS_BUCKET")  # unset -> no tile results, no cache
+
+# Once per execution environment, during Lambda's Init phase: put the
+# image's prebuilt numba cache where numba will look, before anything
+# imports hazardlib (nothing above does -- see numba_cache.py for why this
+# took ~65s off each new container's first scenario request).
+numba_cache.seed()
 
 
 def handler(event: dict, context) -> dict:
@@ -126,6 +133,7 @@ def _fault_scenario(query: dict) -> dict:
     if (cached := _cached_response(scenario_id)) is not None:
         return cached
 
+    t_rupture = time.monotonic()
     rupture = from_fault(
         fault_id=fault["fault_id"],
         name=fault["name"],
@@ -138,7 +146,7 @@ def _fault_scenario(query: dict) -> dict:
         min_depth_km=fault["min_depth_km"],
         max_depth_km=fault["max_depth_km"],
     )
-    return _run_and_respond(rupture, probability_level, scenario_id)
+    return _run_and_respond(rupture, probability_level, scenario_id, time.monotonic() - t_rupture)
 
 
 def _manual_scenario(body: dict) -> dict:
@@ -154,10 +162,11 @@ def _manual_scenario(body: dict) -> dict:
     if (cached := _cached_response(scenario_id)) is not None:
         return cached
 
+    t_rupture = time.monotonic()
     rupture = from_manual_input(
         lat=lat, lon=lon, mag=mag, rake=rake, strike=strike, dip=dip, ztor_km=ztor_km
     )
-    return _run_and_respond(rupture, probability_level, scenario_id)
+    return _run_and_respond(rupture, probability_level, scenario_id, time.monotonic() - t_rupture)
 
 
 def _cached_response(scenario_id: str) -> dict | None:
@@ -181,14 +190,20 @@ def _cached_response(scenario_id: str) -> dict | None:
     return _response(200, {**payload, "cached": True})
 
 
-def _run_and_respond(rupture: Rupture, probability_level: str, scenario_id: str) -> dict:
+def _run_and_respond(
+    rupture: Rupture, probability_level: str, scenario_id: str, rupture_seconds: float = 0.0
+) -> dict:
     # Imported here, not at module level: engine.py -> ground_motion.py
     # imports openquake.hazardlib directly, which drags in numpy/scipy/
     # numba (multi-second cold-start cost, confirmed against the real
     # deployed Lambda -- /faults and /buildings/{id} cold starts ran 7-9s+
     # even though neither route's own code touches physics at all, purely
     # from this module-level import chain). Only the two scenario routes
-    # that reach this function actually need it.
+    # that reach this function actually need it. Kept lazy deliberately
+    # (ADR-0021): Init already runs ~7s of Lambda's hard 10s Init cap, and
+    # overrunning it re-runs the whole Init inside the first request. In
+    # practice from_fault/from_manual_input (surface.py) import hazardlib
+    # before this line; its numba JIT is prebuilt (numba_cache.py).
     t0 = time.monotonic()
     from .engine import summarize_scenario
     from .ground_motion import estimate_significant_distance_km
@@ -257,14 +272,15 @@ def _run_and_respond(rupture: Rupture, probability_level: str, scenario_id: str)
         write_response(RESULTS_BUCKET, scenario_id, payload)
 
     # Per-stage timings, so a slow request in CloudWatch says where its
-    # time went -- the first scenario request in a fresh execution
-    # environment has run 60-85s vs. 2-20s warm (2026-09 cache-warm sweep),
-    # and the deferred imports above are one suspect.
+    # time went. `rupture` covers building the rupture surface, which is
+    # where hazardlib (and its numba JIT, numba_cache.py) first gets
+    # imported in a fresh execution environment -- ~65s per new container
+    # before the image shipped a numba cache; `import` is then ~0.
     t_end = time.monotonic()
     print(
         f"scenario: computed {scenario_id} {rupture.source} {probability_level}: "
         f"{summary.n_evaluated} evaluated, {summary.shipped.num_rows} shipped; "
-        f"import {t_import - t0:.1f}s, first batch {summary.seconds_to_first_batch:.1f}s, "
+        f"rupture {rupture_seconds:.1f}s, import {t_import - t0:.1f}s, first batch {summary.seconds_to_first_batch:.1f}s, "
         f"compute {t_compute - t_import:.1f}s, "
         f"write {t_end - t_compute:.1f}s"
     )

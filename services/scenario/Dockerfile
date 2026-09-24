@@ -55,4 +55,25 @@ RUN pip install --no-cache-dir --no-deps "openquake.engine>=3.19" && \
     pip install --no-cache-dir --no-deps ./tiles_pkg && \
     pip install --no-cache-dir --no-deps .
 
+# Set for the build steps below *and* at runtime (see each module's own
+# docstring):
+# - NUMBA_CPU_NAME=generic: numba cache entries built here (often under
+#   amd64 emulation) must match Lambda's hosts, not this build machine's CPU.
+# - TWINER_NUMBA_CACHE_SEED: where the prebuilt cache lives; handler.py
+#   copies it into NUMBA_CACHE_DIR (/tmp, set by the stack) on Init.
+# - TWINER_DUCKDB_EXTENSION_DIR: DuckDB loads httpfs/spatial from here and
+#   never downloads them at runtime (db.py).
+ENV NUMBA_CPU_NAME=generic \
+    TWINER_NUMBA_CACHE_SEED=/opt/numba_cache \
+    TWINER_DUCKDB_EXTENSION_DIR=/opt/duckdb_extensions
+
+# DuckDB extensions, matching the exact duckdb version installed above
+# and this image's platform (linux_amd64).
+RUN python -c "import duckdb; con = duckdb.connect(config={'extension_directory': '/opt/duckdb_extensions'}); con.execute('INSTALL httpfs'); con.execute('INSTALL spatial')"
+
+# numba's JIT cache for everything a scenario compiles (numba_cache.py):
+# built against this image's own site-packages, so the source paths and
+# mtimes numba keys the cache by match at runtime.
+RUN NUMBA_CACHE_DIR=/opt/numba_cache MPLCONFIGDIR=/tmp/matplotlib python -m scenario.numba_cache
+
 CMD ["scenario.handler.handler"]

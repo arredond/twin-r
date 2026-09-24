@@ -6,9 +6,10 @@
 > at 3,008 MB. The cause was materializing every evaluated building at once,
 > mostly DuckDB's `.df()` conversion; neither the exposure join (suspect 1
 > below) nor DuckDB threads/`memory_limit` changed the peak. Evaluation is
-> now streamed in batches. Still open: the first scenario request in a fresh
-> execution environment takes 60-85s (vs. 2-20s warm). `handler.py` now logs
-> per-stage timings to pin that down.
+> now streamed in batches. The slow first scenario request in each new
+> execution environment (60-85s vs. 2-20s warm) was numba recompiling
+> hazardlib from scratch on Lambda's read-only filesystem; fixed by
+> shipping a prebuilt cache in the image (ADR-0021).
 
 The AWS-deployed scenario Lambda (ADR-0016) is functionally correct --
 verified end-to-end against both fault mode (`fault_id=ES412`) and manual

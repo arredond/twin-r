@@ -22,13 +22,25 @@ loaded once are visible to every cursor, so the once-per-process
 httpfs/spatial flags below still hold. Lambda handles one request per
 execution environment at a time, so it was never affected; this matters
 for local dev, and for anything else that calls in from several threads.
+
+**Extensions come from the image, not the network, when bundled.** The
+scenario Lambda's image installs httpfs and spatial at build time into
+`$TWINER_DUCKDB_EXTENSION_DIR` (services/scenario/Dockerfile); with that
+set, the database loads them from there and never reaches out to
+extensions.duckdb.org, which it otherwise did on every cold start (a
+download per new execution environment, and a third-party dependency on
+the request path). Without it (local dev), `_load_extension` falls back to
+DuckDB's own INSTALL-then-LOAD into the user's extension directory.
 """
 
 from __future__ import annotations
 
+import os
 import threading
 
 import duckdb
+
+EXTENSION_DIR_ENV = "TWINER_DUCKDB_EXTENSION_DIR"
 
 _con: duckdb.DuckDBPyConnection | None = None
 _con_lock = threading.Lock()
@@ -44,7 +56,17 @@ def get_connection() -> duckdb.DuckDBPyConnection:
     if cursor is None:
         with _con_lock:
             if _con is None:
-                _con = duckdb.connect()
+                extension_dir = os.environ.get(EXTENSION_DIR_ENV)
+                _con = duckdb.connect(
+                    # Bundled means complete: never try to fetch a missing
+                    # one at query time either.
+                    config={
+                        "extension_directory": extension_dir,
+                        "autoinstall_known_extensions": False,
+                    }
+                    if extension_dir
+                    else {}
+                )
             cursor = _con.cursor()
         _thread_local.cursor = cursor
     return cursor
@@ -55,7 +77,7 @@ def ensure_httpfs(con: duckdb.DuckDBPyConnection) -> None:
     global _httpfs_loaded
     with _con_lock:
         if not _httpfs_loaded:
-            con.execute("INSTALL httpfs; LOAD httpfs;")
+            _load_extension(con, "httpfs")
             _httpfs_loaded = True
 
 
@@ -64,5 +86,17 @@ def ensure_spatial(con: duckdb.DuckDBPyConnection) -> None:
     global _spatial_loaded
     with _con_lock:
         if not _spatial_loaded:
-            con.execute("INSTALL spatial; LOAD spatial;")
+            _load_extension(con, "spatial")
             _spatial_loaded = True
+
+
+def _load_extension(con: duckdb.DuckDBPyConnection, name: str) -> None:
+    """LOAD, installing first only if it isn't already installed -- a
+    bundled extension directory (module docstring) is never written to."""
+    try:
+        con.execute(f"LOAD {name}")
+    except duckdb.IOException:
+        if os.environ.get(EXTENSION_DIR_ENV):
+            raise  # bundled but missing: a broken image, not something to download around
+        con.execute(f"INSTALL {name}")
+        con.execute(f"LOAD {name}")
