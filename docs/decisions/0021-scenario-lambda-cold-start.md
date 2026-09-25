@@ -108,3 +108,39 @@ The part of that article worth adopting was bundling the extensions, above.
   since they're built together. If an entry doesn't match, numba silently
   recompiles: slower, never wrong.
 - No result changes, so `API_VERSION` stays at 3.
+
+## Follow-up (2026-09-25): the numba cache didn't help as expected in prod
+
+After deploying, a new environment's first scenario still took 64-73s in
+the cache-warm sweep. Each logged `numba_cache: seeded ...` and then
+`rupture 55.2s`; its next scenario, `rupture 0.0s`. That's ~10s better
+than the ~65s before, not the few seconds measured in the local image.
+
+Ruled out:
+
+- **CPU mismatch**: with `NUMBA_CPU_NAME=generic`, numba also fixes the CPU
+  features (to `""`), so the cache key doesn't depend on the host.
+- **File timestamps**: numba stamps cache entries with the source file's
+  `(mtime, size)`, and Lambda converts images into its own block format,
+  so changed timestamps were the obvious suspect. But changing every
+  hazardlib source file's mtime inside the image locally still gave cache
+  hits (first rupture 13.5s, vs. 11.4s untouched and 148.8s with no cache,
+  under emulation). A size-only stamp patch was written and dropped
+  without shipping: it fixed a cause that couldn't be reproduced.
+
+Leading hypothesis, unconfirmed: first reads of the image itself. Lambda
+fetches a container image's blocks lazily, from its storage, the first
+time a file is read, and importing hazardlib reads a lot of files
+(`openquake.hazardlib.gsim` imports every ground-motion model, and some
+load data tables). The first environment's seed copy of 7MB took 1.18s,
+where later ones on warm blocks took 0.02s.
+
+To settle it, `handler.py` now logs, per computed scenario, `hazardlib
+import Xs` (timed on its own, before the rupture is built) and `numba
+cache files written N` (`numba_cache.files_written_since_seed`: numba
+writes only on a miss, so 0 means the prebuilt cache covered everything).
+`/warmup` logs and returns the same count. Locally: 0 files and 2.35s
+with the seeded cache, 106 files and 15.7s without it. After the next
+deploy, a new environment's first scenario showing a long import with 0
+files written points at image I/O; files written > 0 points at numba
+still missing its cache.

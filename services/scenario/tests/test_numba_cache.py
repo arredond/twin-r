@@ -41,3 +41,25 @@ def test_seed_is_a_no_op_without_a_seed_dir_or_when_already_seeded(tmp_path, mon
     monkeypatch.setenv(numba_cache.SEED_DIR_ENV, str(_read_only_seed(tmp_path)))
     numba_cache.seed()
     assert os.listdir(target) == ["kept"]
+
+
+def test_files_written_since_seed_counts_only_what_numba_adds_afterwards(tmp_path, monkeypatch):
+    # numba writes to its cache only on a miss, so this is the diagnostic's
+    # "did the prebuilt cache cover it" signal (numba_cache.py).
+    seed = tmp_path / "seed"
+    (seed / "geo_abc").mkdir(parents=True)
+    (seed / "geo_abc" / "f.nbi").write_bytes(b"index")
+    target = tmp_path / "numba_cache"
+    monkeypatch.setenv(numba_cache.SEED_DIR_ENV, str(seed))
+    monkeypatch.setenv("NUMBA_CACHE_DIR", str(target))
+    monkeypatch.setattr(numba_cache, "_seeded_at", None)
+    assert numba_cache.files_written_since_seed() is None  # seed() hasn't run
+
+    numba_cache.seed()
+    assert numba_cache.files_written_since_seed() == 0  # the copy itself doesn't count
+
+    new = target / "geo_abc" / "g.nbc"
+    new.write_bytes(b"compiled on a miss")
+    later = numba_cache._seeded_at + 1  # pyrefly: ignore -- set by seed() above
+    os.utime(new, (later, later))
+    assert numba_cache.files_written_since_seed() == 1

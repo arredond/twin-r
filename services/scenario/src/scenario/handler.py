@@ -139,6 +139,7 @@ def _fault_scenario(query: dict) -> dict:
     if (cached := _cached_response(scenario_id)) is not None:
         return cached
 
+    hazardlib_seconds = _import_hazardlib()
     t_rupture = time.monotonic()
     rupture = from_fault(
         fault_id=fault["fault_id"],
@@ -152,7 +153,9 @@ def _fault_scenario(query: dict) -> dict:
         min_depth_km=fault["min_depth_km"],
         max_depth_km=fault["max_depth_km"],
     )
-    return _run_and_respond(rupture, probability_level, scenario_id, time.monotonic() - t_rupture)
+    return _run_and_respond(
+        rupture, probability_level, scenario_id, time.monotonic() - t_rupture, hazardlib_seconds
+    )
 
 
 def _manual_scenario(body: dict) -> dict:
@@ -168,11 +171,26 @@ def _manual_scenario(body: dict) -> dict:
     if (cached := _cached_response(scenario_id)) is not None:
         return cached
 
+    hazardlib_seconds = _import_hazardlib()
     t_rupture = time.monotonic()
     rupture = from_manual_input(
         lat=lat, lon=lon, mag=mag, rake=rake, strike=strike, dip=dip, ztor_km=ztor_km
     )
-    return _run_and_respond(rupture, probability_level, scenario_id, time.monotonic() - t_rupture)
+    return _run_and_respond(
+        rupture, probability_level, scenario_id, time.monotonic() - t_rupture, hazardlib_seconds
+    )
+
+
+def _import_hazardlib() -> float:
+    """Import everything a scenario needs from hazardlib (via surface.py and
+    ground_motion.py) and return how long that took -- ~0 once an
+    environment has done it. Called after the scenario-cache check, so a
+    cache hit never pays for it, and timed on its own so the log line in
+    `_run_and_respond` separates it from building the rupture."""
+    t0 = time.monotonic()
+    from . import ground_motion, surface  # noqa: F401
+
+    return time.monotonic() - t0
 
 
 def _cached_response(scenario_id: str) -> dict | None:
@@ -197,7 +215,11 @@ def _cached_response(scenario_id: str) -> dict | None:
 
 
 def _run_and_respond(
-    rupture: Rupture, probability_level: str, scenario_id: str, rupture_seconds: float = 0.0
+    rupture: Rupture,
+    probability_level: str,
+    scenario_id: str,
+    rupture_seconds: float = 0.0,
+    hazardlib_seconds: float = 0.0,
 ) -> dict:
     # Imported here, not at module level: engine.py -> ground_motion.py
     # imports openquake.hazardlib directly, which drags in numpy/scipy/
@@ -277,15 +299,18 @@ def _run_and_respond(
         write_response(RESULTS_BUCKET, scenario_id, payload)
 
     # Per-stage timings, so a slow request in CloudWatch says where its
-    # time went. `rupture` covers building the rupture surface, which is
-    # where hazardlib (and its numba JIT, numba_cache.py) first gets
-    # imported in a fresh execution environment -- ~65s per new container
-    # before the image shipped a numba cache; `import` is then ~0.
+    # time went. In a fresh execution environment, `hazardlib import` is
+    # the one-time import (and numba compile or cache load, numba_cache.py)
+    # that used to hide inside `rupture` (~55-65s per new container,
+    # 2026-09); `numba cache files written` > 0 means numba missed its
+    # prebuilt cache and compiled.
     t_end = time.monotonic()
     print(
         f"scenario: computed {scenario_id} {rupture.source} {probability_level}: "
         f"{summary.n_evaluated} evaluated, {summary.shipped.num_rows} shipped; "
-        f"rupture {rupture_seconds:.1f}s, import {t_import - t0:.1f}s, first batch {summary.seconds_to_first_batch:.1f}s, "
+        f"hazardlib import {hazardlib_seconds:.1f}s, rupture {rupture_seconds:.1f}s, "
+        f"numba cache files written {numba_cache.files_written_since_seed()}, "
+        f"import {t_import - t0:.1f}s, first batch {summary.seconds_to_first_batch:.1f}s, "
         f"compute {t_compute - t_import:.1f}s, "
         f"write {t_end - t_compute:.1f}s"
     )

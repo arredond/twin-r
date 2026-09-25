@@ -33,6 +33,9 @@ import time
 
 SEED_DIR_ENV = "TWINER_NUMBA_CACHE_SEED"
 
+# When `seed()` finished copying, if it ran: see `files_written_since_seed`.
+_seeded_at: float | None = None
+
 
 def seed() -> None:
     """Copy the image's prebuilt cache into `NUMBA_CACHE_DIR`, once per
@@ -53,6 +56,30 @@ def seed() -> None:
     for root, _, _ in os.walk(cache_dir):
         os.chmod(root, 0o755)
     print(f"numba_cache: seeded {cache_dir} from {seed_dir} in {time.monotonic() - t0:.2f}s")
+    global _seeded_at
+    _seeded_at = time.time()
+
+
+def files_written_since_seed() -> int | None:
+    """How many files numba has written to `NUMBA_CACHE_DIR` since `seed()`
+    copied the prebuilt cache in, or None if it didn't run. numba writes
+    only on a cache *miss* (it compiled something and saved it), never on
+    a hit, so 0 after a scenario means the prebuilt cache covered it.
+
+    A diagnostic (handler.py logs it): deployed, a new environment's first
+    scenario still spent ~55s building its rupture (2026-09-25), though
+    the same image used the cache fine locally. This, logged next to the
+    hazardlib import time, tells a cache miss apart from slow first reads
+    of the image itself."""
+    cache_dir = os.environ.get("NUMBA_CACHE_DIR")
+    if _seeded_at is None or not cache_dir:
+        return None
+    return sum(
+        1
+        for root, _, files in os.walk(cache_dir)
+        for name in files
+        if os.stat(os.path.join(root, name)).st_mtime > _seeded_at
+    )
 
 
 def warm() -> None:

@@ -21,6 +21,7 @@ from __future__ import annotations
 import time
 
 from .db import ensure_httpfs, ensure_spatial, get_connection
+from .numba_cache import files_written_since_seed
 from .numba_cache import warm as warm_numba
 
 _warmed = False
@@ -43,5 +44,12 @@ def warm_up(needs_httpfs: bool) -> dict:
     ensure_spatial(con)  # every fault request needs it (faults.get_fault)
     _warmed = True
     seconds = round(time.monotonic() - t0, 2)
-    print(f"warmup: done in {seconds}s")
-    return {"status": "warm", "already_warm": False, "seconds": seconds}
+    # > 0 means numba missed the image's prebuilt cache (numba_cache.py).
+    written = files_written_since_seed()
+    print(f"warmup: done in {seconds}s, numba cache files written {written}")
+    return {
+        "status": "warm",
+        "already_warm": False,
+        "seconds": seconds,
+        "numba_cache_files_written": written,
+    }
