@@ -188,6 +188,9 @@ def _import_hazardlib() -> float:
     cache hit never pays for it, and timed on its own so the log line in
     `_run_and_respond` separates it from building the rupture."""
     t0 = time.monotonic()
+    # First, so numba reads the image's prebuilt cache (numba_cache.py);
+    # not at Init, which must stay under Lambda's 10s cap.
+    numba_cache.use_size_only_source_stamps()
     from . import ground_motion, surface  # noqa: F401
 
     return time.monotonic() - t0

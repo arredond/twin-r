@@ -11,6 +11,7 @@ import base64
 import gzip
 import importlib
 import json
+import os
 import subprocess
 import sys
 import types
@@ -174,6 +175,26 @@ def test_importing_the_handler_loads_neither_numba_nor_hazardlib():
         "assert not loaded, loaded"
     )
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_init_stays_numba_free_even_with_the_prebuilt_cache_configured(tmp_path: Path):
+    # As in the image: seed() copies the cache at Init, but must not import
+    # numba there (Init is capped at 10s; numba_cache.seed's docstring).
+    seed = tmp_path / "seed"
+    (seed / "geo_abc").mkdir(parents=True)
+    (seed / "geo_abc" / "f.nbi").write_bytes(b"index")
+    env = {
+        **os.environ,
+        "TWINER_NUMBA_CACHE_SEED": str(seed),
+        "NUMBA_CACHE_DIR": str(tmp_path / "numba_cache"),
+    }
+    code = (
+        "import sys, os, scenario.handler; "
+        "assert os.path.exists(os.environ['NUMBA_CACHE_DIR']), 'not seeded'; "
+        "loaded = {'numba', 'openquake.hazardlib'} & set(sys.modules); "
+        "assert not loaded, loaded"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True, env=env)
 
 
 def test_warmup_does_the_one_time_setup_once(handler, monkeypatch: pytest.MonkeyPatch):

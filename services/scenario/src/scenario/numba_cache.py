@@ -46,11 +46,14 @@ def seed() -> None:
     image's prebuilt cache. A no-op outside the image (local dev keeps
     numba's normal writable cache).
 
-    Always switches numba to size-only source stamps (see
-    `use_size_only_source_stamps`), even when the copy below is skipped
-    because `NUMBA_CACHE_DIR` already exists: Lambda can re-run Init in an
-    environment whose `/tmp` survived, and that copy is only usable with
-    the same stamps."""
+    Only copies: it must not import numba, because Init is capped at 10s
+    and already ran 9.8s on the first environments after a deploy
+    (2026-09-25) when this also applied `use_size_only_source_stamps`.
+    That patch is applied right before hazardlib is imported instead
+    (handler.py's `_import_hazardlib`, and `warm`), which is all it needs.
+    The copy is skipped if `NUMBA_CACHE_DIR` already exists, because Lambda
+    can re-run Init in an environment whose `/tmp` survived; the stamps
+    applied later make that copy usable too."""
     seed_dir = os.environ.get(SEED_DIR_ENV)
     cache_dir = os.environ.get("NUMBA_CACHE_DIR")
     if not seed_dir or not cache_dir:
@@ -69,7 +72,6 @@ def seed() -> None:
         print(f"numba_cache: seeded {cache_dir} from {seed_dir} in {time.monotonic() - t0:.2f}s")
     else:
         print(f"numba_cache: {cache_dir} already present (re-run Init), not re-seeding")
-    use_size_only_source_stamps()
     global _seeded_at
     _seeded_at = time.time()
 
@@ -78,8 +80,10 @@ def use_size_only_source_stamps() -> None:
     """In the image only (a no-op unless `TWINER_NUMBA_CACHE_SEED` is set):
     make numba stamp each source file by its size alone, not by
     `(st_mtime, st_size)`. Must run before hazardlib is imported, both at
-    build (`warm`, writing the cache) and at runtime (`seed`, reading it),
-    so the two agree. Idempotent.
+    build (`warm`, writing the cache) and at runtime (handler.py's
+    `_import_hazardlib`, and `warm` via /warmup, reading it), so the two
+    agree. Idempotent. Not called from `seed()`: importing numba there
+    would put it in Lambda's Init phase (see `seed`).
 
     Why: numba only trusts a cache entry whose source file's stamp matches
     the one recorded when the entry was written, and file modification
