@@ -1,7 +1,23 @@
 import os
 import stat
+import types
 
+import pytest
+from numba.core import caching
 from scenario import numba_cache
+
+# The locator numba_cache.use_size_only_source_stamps patches (public in
+# local dev's numba, private in the image's 0.61).
+_LOCATOR = getattr(caching, "UserProvidedCacheLocator", None) or getattr(  # noqa: B009
+    caching, "_UserProvidedCacheLocator"
+)
+
+
+@pytest.fixture(autouse=True)
+def _restore_numba_stamps(monkeypatch):
+    """seed() patches numba process-wide; undo it after every test here so
+    it can't leak into other tests (or into each other)."""
+    monkeypatch.setattr(_LOCATOR, "get_source_stamp", _LOCATOR.get_source_stamp)
 
 
 def _read_only_seed(tmp_path):
@@ -63,3 +79,22 @@ def test_files_written_since_seed_counts_only_what_numba_adds_afterwards(tmp_pat
     later = numba_cache._seeded_at + 1  # pyrefly: ignore -- set by seed() above
     os.utime(new, (later, later))
     assert numba_cache.files_written_since_seed() == 1
+
+
+def test_size_only_stamps_ignore_modification_time_in_the_image(tmp_path, monkeypatch):
+    # Lambda doesn't preserve the image's file mtimes, which made numba
+    # treat every prebuilt cache entry as stale (numba_cache.py).
+    locator = _LOCATOR
+    source = tmp_path / "module.py"
+    source.write_text("x = 1\n")
+    fake = types.SimpleNamespace(_py_file=str(source))
+
+    monkeypatch.delenv(numba_cache.SEED_DIR_ENV, raising=False)
+    numba_cache.use_size_only_source_stamps()  # outside the image: untouched
+    assert locator.get_source_stamp(fake)[0] == os.stat(source).st_mtime
+
+    monkeypatch.setenv(numba_cache.SEED_DIR_ENV, str(tmp_path))
+    numba_cache.use_size_only_source_stamps()
+    before = locator.get_source_stamp(fake)
+    os.utime(source, (1577836800, 1577836800))
+    assert locator.get_source_stamp(fake) == before == (0.0, len("x = 1\n"))

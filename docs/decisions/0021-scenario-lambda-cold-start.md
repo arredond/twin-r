@@ -109,38 +109,44 @@ The part of that article worth adopting was bundling the extensions, above.
   recompiles: slower, never wrong.
 - No result changes, so `API_VERSION` stays at 3.
 
-## Follow-up (2026-09-25): the numba cache didn't help as expected in prod
+## Follow-up (2026-09-25): file timestamps don't survive deployment; size-only stamps
 
 After deploying, a new environment's first scenario still took 64-73s in
 the cache-warm sweep. Each logged `numba_cache: seeded ...` and then
-`rupture 55.2s`; its next scenario, `rupture 0.0s`. That's ~10s better
-than the ~65s before, not the few seconds measured in the local image.
+`rupture 55.2s`; its next scenario, `rupture 0.0s`. The same image had used
+the cache fine locally.
 
-Ruled out:
+**How it was traced**:
 
-- **CPU mismatch**: with `NUMBA_CPU_NAME=generic`, numba also fixes the CPU
-  features (to `""`), so the cache key doesn't depend on the host.
-- **File timestamps**: numba stamps cache entries with the source file's
-  `(mtime, size)`, and Lambda converts images into its own block format,
-  so changed timestamps were the obvious suspect. But changing every
-  hazardlib source file's mtime inside the image locally still gave cache
-  hits (first rupture 13.5s, vs. 11.4s untouched and 148.8s with no cache,
-  under emulation). A size-only stamp patch was written and dropped
-  without shipping: it fixed a cause that couldn't be reproduced.
+1. CPU mismatch ruled out: with `NUMBA_CPU_NAME=generic`, numba also fixes
+   the CPU features (to `""`), so the cache key doesn't depend on the host.
+2. File timestamps were the next suspect. numba stamps each cache entry
+   with its source file's `(mtime, size)`, and Lambda converts container
+   images into its own block format. A first local test *appeared* to rule
+   them out, but it was invalid: it changed mtimes with `find ... -exec
+   touch`, and the Lambda base image has no `find`, so nothing was
+   changed. The error was filtered out of the output.
+3. A diagnostic shipped instead (still in place): per computed scenario,
+   `handler.py` logs `hazardlib import Xs`, timed on its own, and `numba
+   cache files written N` (`numba_cache.files_written_since_seed`: numba
+   writes only on a miss). `/warmup` logs and returns the same count. In
+   prod, a manual M9 scenario on a fresh environment logged `hazardlib
+   import 54.5s ... numba cache files written 110`: a full recompile
+   (a from-scratch compile writes ~106 locally), not slow image reads.
+4. Redone correctly (Python `os.utime` on all 988 openquake `.py` files in
+   the image), changed mtimes reproduce it: first import + rupture
+   154.8s, vs. 12.0s untouched and 148.8s with no cache.
 
-Leading hypothesis, unconfirmed: first reads of the image itself. Lambda
-fetches a container image's blocks lazily, from its storage, the first
-time a file is read, and importing hazardlib reads a lot of files
-(`openquake.hazardlib.gsim` imports every ground-motion model, and some
-load data tables). The first environment's seed copy of 7MB took 1.18s,
-where later ones on warm blocks took 0.02s.
+**Fix** (`numba_cache.use_size_only_source_stamps`): in the image only
+(gated on `TWINER_NUMBA_CACHE_SEED`), numba stamps source files by size
+alone. It applies at build, when the cache is written, and at Init, when
+it's read, so both sides agree. That's safe because the image is immutable
+after build. numba 0.61, pinned through hazardlib, has no supported hook
+for this, so it patches the locator class used under `NUMBA_CACHE_DIR`;
+later versions' `NUMBA_CACHE_LOCATOR_CLASSES` could replace it with
+configuration.
 
-To settle it, `handler.py` now logs, per computed scenario, `hazardlib
-import Xs` (timed on its own, before the rupture is built) and `numba
-cache files written N` (`numba_cache.files_written_since_seed`: numba
-writes only on a miss, so 0 means the prebuilt cache covered everything).
-`/warmup` logs and returns the same count. Locally: 0 files and 2.35s
-with the seeded cache, 106 files and 15.7s without it. After the next
-deploy, a new environment's first scenario showing a long import with 0
-files written points at image I/O; files written > 0 points at numba
-still missing its cache.
+Also fixed: `seed()` used to skip everything when `/tmp/numba_cache`
+already existed. Lambda can re-run Init in an environment whose `/tmp`
+survived, and one such environment's `/warmup` took 71s. It now always
+applies the size-only stamps; only the copy is skipped.

@@ -18,8 +18,12 @@ imports hazardlib. Two things make a build-time cache valid at runtime:
   runtime): numba keys cache entries by CPU model and features, and the
   image is built on whatever machine runs `cdk deploy` (often under amd64
   emulation), not on Lambda's hosts. A generic-CPU entry matches anywhere.
-- The same source paths and mtimes: the cache is built in the final image
-  layout, against the exact site-packages the function runs.
+- The same source files: the cache is built in the final image layout,
+  against the exact site-packages the function runs. numba stamps each
+  cached entry with its source file's modification time and size, and the
+  modification times *don't* survive deployment to Lambda, so the image
+  stamps by size only (`use_size_only_source_stamps`). Without that, every
+  entry looked stale in prod and was recompiled (2026-09-25).
 
 Measured locally: hazardlib's cold import 16.2s -> 1.3s with a seeded cache.
 A read-only cache directory measured the full 16s, i.e. no cache at all.
@@ -38,26 +42,74 @@ _seeded_at: float | None = None
 
 
 def seed() -> None:
-    """Copy the image's prebuilt cache into `NUMBA_CACHE_DIR`, once per
-    execution environment. A no-op unless both are set (local dev uses
-    numba's normal writable cache) or the target already exists."""
+    """Once per execution environment, during Init: make numba use the
+    image's prebuilt cache. A no-op outside the image (local dev keeps
+    numba's normal writable cache).
+
+    Always switches numba to size-only source stamps (see
+    `use_size_only_source_stamps`), even when the copy below is skipped
+    because `NUMBA_CACHE_DIR` already exists: Lambda can re-run Init in an
+    environment whose `/tmp` survived, and that copy is only usable with
+    the same stamps."""
     seed_dir = os.environ.get(SEED_DIR_ENV)
     cache_dir = os.environ.get("NUMBA_CACHE_DIR")
-    if not seed_dir or not cache_dir or os.path.exists(cache_dir):
+    if not seed_dir or not cache_dir:
         return
-    if not os.path.isdir(seed_dir):
-        print(f"numba_cache: no prebuilt cache at {seed_dir}, will JIT from scratch")
-        return
-    t0 = time.monotonic()
-    # copyfile, not copytree's default copy2: don't carry over the image's
-    # permission bits, and make every directory writable, so numba treats
-    # the copy as a normal cache it can also add to.
-    shutil.copytree(seed_dir, cache_dir, copy_function=shutil.copyfile)
-    for root, _, _ in os.walk(cache_dir):
-        os.chmod(root, 0o755)
-    print(f"numba_cache: seeded {cache_dir} from {seed_dir} in {time.monotonic() - t0:.2f}s")
+    if not os.path.exists(cache_dir):
+        if not os.path.isdir(seed_dir):
+            print(f"numba_cache: no prebuilt cache at {seed_dir}, will JIT from scratch")
+            return
+        t0 = time.monotonic()
+        # copyfile, not copytree's default copy2: don't carry over the
+        # image's permission bits, and make every directory writable, so
+        # numba treats the copy as a normal cache it can also add to.
+        shutil.copytree(seed_dir, cache_dir, copy_function=shutil.copyfile)
+        for root, _, _ in os.walk(cache_dir):
+            os.chmod(root, 0o755)
+        print(f"numba_cache: seeded {cache_dir} from {seed_dir} in {time.monotonic() - t0:.2f}s")
+    else:
+        print(f"numba_cache: {cache_dir} already present (re-run Init), not re-seeding")
+    use_size_only_source_stamps()
     global _seeded_at
     _seeded_at = time.time()
+
+
+def use_size_only_source_stamps() -> None:
+    """In the image only (a no-op unless `TWINER_NUMBA_CACHE_SEED` is set):
+    make numba stamp each source file by its size alone, not by
+    `(st_mtime, st_size)`. Must run before hazardlib is imported, both at
+    build (`warm`, writing the cache) and at runtime (`seed`, reading it),
+    so the two agree. Idempotent.
+
+    Why: numba only trusts a cache entry whose source file's stamp matches
+    the one recorded when the entry was written, and file modification
+    times don't survive the trip from `docker build` to a running Lambda
+    (Lambda converts container images into its own block format). So
+    every entry looked stale in prod, and each new environment recompiled
+    everything: ~55s, with the handler's diagnostic logging `numba cache
+    files written 110` (2026-09-25). Reproduced locally by changing every
+    openquake source file's mtime inside the image: first rupture 154.8s
+    vs. 12.0s untouched. Size-only is safe here because the image is
+    immutable: a source file can't change between build and run.
+
+    numba 0.61 (pinned through hazardlib) has no supported hook for this,
+    so it patches the cache locator numba picks when `NUMBA_CACHE_DIR` is
+    set. Later numba versions' `NUMBA_CACHE_LOCATOR_CLASSES` would replace
+    the patch with configuration."""
+    if not os.environ.get(SEED_DIR_ENV):
+        return
+    from numba.core import caching
+
+    # Private in numba 0.61 (the image's), public in later versions (local
+    # dev's) -- getattr for both, since each name exists in only one.
+    locator = getattr(caching, "UserProvidedCacheLocator", None) or getattr(  # noqa: B009
+        caching, "_UserProvidedCacheLocator"
+    )
+
+    def size_only_stamp(self) -> tuple[float, int]:
+        return 0.0, os.stat(self._py_file).st_size
+
+    locator.get_source_stamp = size_only_stamp
 
 
 def files_written_since_seed() -> int | None:
@@ -66,11 +118,9 @@ def files_written_since_seed() -> int | None:
     only on a cache *miss* (it compiled something and saved it), never on
     a hit, so 0 after a scenario means the prebuilt cache covered it.
 
-    A diagnostic (handler.py logs it): deployed, a new environment's first
-    scenario still spent ~55s building its rupture (2026-09-25), though
-    the same image used the cache fine locally. This, logged next to the
-    hazardlib import time, tells a cache miss apart from slow first reads
-    of the image itself."""
+    A diagnostic (handler.py and warmup.py log it): it's how the ~55s first
+    scenarios in prod were traced to cache misses (110 files written; see
+    `use_size_only_source_stamps`), and how to tell if they come back."""
     cache_dir = os.environ.get("NUMBA_CACHE_DIR")
     if _seeded_at is None or not cache_dir:
         return None
@@ -88,6 +138,7 @@ def warm() -> None:
     the lazily compiled ones a finite-fault and a point-source scenario
     reach (surface build, Rjb distances, the GMPE for every IM type the
     fragility curves use). Needs no data files, so it runs at image build."""
+    use_size_only_source_stamps()  # before anything below compiles or loads
     import numpy as np
 
     from .ground_motion import IM_TYPE_TO_IMT, GriddedIntensity, estimate_significant_distance_km
