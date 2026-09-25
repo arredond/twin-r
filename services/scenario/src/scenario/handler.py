@@ -52,12 +52,6 @@ FRAGILITY_PATH = os.environ.get("TWINER_FRAGILITY_PATH", "data/fragility/fragili
 FAULTS_PATH = os.environ.get("TWINER_FAULTS_PATH", "data/faults/qafi_faults.parquet")
 RESULTS_BUCKET = os.environ.get("TWINER_RESULTS_BUCKET")  # unset -> no tile results, no cache
 
-# Once per execution environment, during Lambda's Init phase: put the
-# image's prebuilt numba cache where numba will look, before anything
-# imports hazardlib (nothing above does -- see numba_cache.py for why this
-# took ~65s off each new container's first scenario request).
-numba_cache.seed()
-
 
 def handler(event: dict, context) -> dict:
     method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
@@ -76,10 +70,7 @@ def handler(event: dict, context) -> dict:
             return _list_faults()
 
         if method == "GET" and path == "/warmup":
-            data_paths = (BUILDINGS_PATH, EXPOSURE_PATH, FRAGILITY_PATH, FAULTS_PATH)
-            return _response(
-                200, warm_up(needs_httpfs=any(p.startswith("s3://") for p in data_paths))
-            )
+            return _response(200, warm_up(BUILDINGS_PATH, EXPOSURE_PATH))
 
         if method == "GET" and path == "/scenarios/fault":
             return _fault_scenario(query)
@@ -190,7 +181,7 @@ def _import_hazardlib() -> float:
     t0 = time.monotonic()
     # First, so numba reads the image's prebuilt cache (numba_cache.py);
     # not at Init, which must stay under Lambda's 10s cap.
-    numba_cache.use_size_only_source_stamps()
+    numba_cache.prepare()
     from . import ground_motion, surface  # noqa: F401
 
     return time.monotonic() - t0

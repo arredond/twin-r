@@ -150,3 +150,12 @@ Also fixed: `seed()` used to skip everything when `/tmp/numba_cache`
 already existed. Lambda can re-run Init in an environment whose `/tmp`
 survived, and one such environment's `/warmup` took 71s. It now always
 applies the size-only stamps; only the copy is skipped.
+
+**Keeping it out of Init.** Applying the stamps inside `seed()` at Init
+imported numba there, and the first environments after a deploy (while
+Lambda is still fetching the image) logged `Init Duration` 9.8s, against
+the 10s cap. With only the copy left in Init: 8.8s. Both now happen in
+`numba_cache.prepare()`, called right before the first hazardlib import
+(handler.py's `_import_hazardlib`, warmup.py), so Init does no numba work
+at all. A subprocess test checks that importing the handler, with the
+cache configured, neither seeds it nor imports numba.

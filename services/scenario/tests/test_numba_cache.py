@@ -18,6 +18,8 @@ def _restore_numba_stamps(monkeypatch):
     """seed() patches numba process-wide; undo it after every test here so
     it can't leak into other tests (or into each other)."""
     monkeypatch.setattr(_LOCATOR, "get_source_stamp", _LOCATOR.get_source_stamp)
+    # seed() runs once per process; each test starts unseeded.
+    monkeypatch.setattr(numba_cache, "_seeded_at", None)
 
 
 def _read_only_seed(tmp_path):
@@ -98,3 +100,20 @@ def test_size_only_stamps_ignore_modification_time_in_the_image(tmp_path, monkey
     before = locator.get_source_stamp(fake)
     os.utime(source, (1577836800, 1577836800))
     assert locator.get_source_stamp(fake) == before == (0.0, len("x = 1\n"))
+
+
+def test_prepare_seeds_once_and_switches_to_size_only_stamps(tmp_path, monkeypatch):
+    seed = _read_only_seed(tmp_path)
+    target = tmp_path / "numba_cache"
+    monkeypatch.setenv(numba_cache.SEED_DIR_ENV, str(seed))
+    monkeypatch.setenv("NUMBA_CACHE_DIR", str(target))
+    source = tmp_path / "module.py"
+    source.write_text("x = 1\n")
+
+    numba_cache.prepare()
+    assert (target / "geo_abc" / "f.nbi").exists()
+    assert _LOCATOR.get_source_stamp(types.SimpleNamespace(_py_file=str(source)))[0] == 0.0
+
+    (target / "geo_abc" / "f.nbi").unlink()
+    numba_cache.prepare()  # already seeded in this environment: no second copy
+    assert not (target / "geo_abc" / "f.nbi").exists()

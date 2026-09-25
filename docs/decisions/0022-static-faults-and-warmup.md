@@ -82,3 +82,17 @@ list. The exporter additionally refuses to write any NaN.
 - Verified locally (`bin/twiner start`): the static file is served in
   ~5ms and is identical to `GET /faults`. `/warmup` reports
   `already_warm: true` on the second call.
+
+## Follow-up (2026-09-25): `/warmup` also runs the building query
+
+On a fresh environment, even after `/warmup`, a scenario's first batch of
+buildings took ~7.7s vs ~2.4s warm. That's S3 connection setup, both
+parquet files' footers, and the first run of the join and Arrow
+conversion. `/warmup` now also runs the scenario's own building query
+(`engine.warm_site_query`, sharing `engine._query_sites` with the real
+path) over a ~1km box in central Madrid. The connection enables DuckDB's
+`parquet_metadata_cache` (db.py), so the parsed footers carry over to the
+real query, alongside the byte ranges DuckDB's external file cache (on by
+default) already keeps. Locally, the query takes 0.2s for 1,167 buildings,
+and the cache setting is neutral on local disk; its benefit is over S3.
+`/warmup`'s log line splits the numba/hazardlib time from the query time.

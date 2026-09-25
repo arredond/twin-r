@@ -86,12 +86,6 @@ def _site_batches(
     (measured on the 2026-09 cache-warm sweep, 49 of 603 scenarios). Batch
     by batch, peak memory tracks `batch_rows` instead of the building
     count."""
-    if buildings_path.startswith("s3://") or exposure_path.startswith("s3://"):
-        # httpfs + DuckDB's default AWS credential chain (picks up the
-        # Lambda execution role automatically) -- no explicit credentials
-        # wired here, matching S3 access via IAM rather than secrets.
-        ensure_httpfs(con)
-
     # A simple lat/lon degree bounding box, not a true geodesic radius --
     # cheap to evaluate and generous enough (longitude degrees narrow
     # towards the poles, so this box is always at least as wide as a true
@@ -122,6 +116,33 @@ def _site_batches(
         _KM_PER_DEGREE_LAT * max(0.1, abs(_cos_deg((lat_min + lat_max) / 2)))
     )
 
+    lat_lo, lat_hi = lat_min - lat_pad, lat_max + lat_pad
+    reader = _query_sites(
+        con,
+        buildings_path,
+        exposure_path,
+        (lon_min - lon_pad, lon_max + lon_pad, lat_lo, lat_hi),
+        batch_rows,
+    )
+    return iter(reader), (lat_lo + lat_hi) / 2
+
+
+def _query_sites(
+    con: duckdb.DuckDBPyConnection,
+    buildings_path: str,
+    exposure_path: str,
+    box: tuple[float, float, float, float],
+    batch_rows: int,
+) -> pa.RecordBatchReader:
+    """Every building in `box` (lon_lo, lon_hi, lat_lo, lat_hi), with the
+    exposure attributes a scenario needs, as a stream of Arrow batches.
+    The one query both `_site_batches` and `warm_site_query` run."""
+    if buildings_path.startswith("s3://") or exposure_path.startswith("s3://"):
+        # httpfs + DuckDB's default AWS credential chain (picks up the
+        # Lambda execution role automatically) -- no explicit credentials
+        # wired here, matching S3 access via IAM rather than secrets.
+        ensure_httpfs(con)
+    lon_lo, lon_hi, lat_lo, lat_hi = box
     # centroid_lon/centroid_lat are precomputed columns (pipelines/exposure,
     # see parse.py's add_spatial_index_columns), not derived here via
     # ST_Centroid -- this is the fix from docs/validation-region-expansion.md
@@ -130,8 +151,7 @@ def _site_batches(
     # reading the (much larger) geometry column for this query entirely.
     # Measured: ~14x faster than the ST_Centroid-on-the-fly equivalent for a
     # regional bounding-box query (see docs/decisions/0006).
-    lat_lo, lat_hi = lat_min - lat_pad, lat_max + lat_pad
-    reader = con.execute(
+    return con.execute(
         """
         SELECT
             b.building_id,
@@ -146,17 +166,26 @@ def _site_batches(
         WHERE b.centroid_lon BETWEEN ? AND ?
           AND b.centroid_lat BETWEEN ? AND ?
         """,
-        [
-            DEFAULT_VS30,
-            buildings_path,
-            exposure_path,
-            lon_min - lon_pad,
-            lon_max + lon_pad,
-            lat_lo,
-            lat_hi,
-        ],
+        [DEFAULT_VS30, buildings_path, exposure_path, lon_lo, lon_hi, lat_lo, lat_hi],
     ).to_arrow_reader(batch_rows)
-    return iter(reader), (lat_lo + lat_hi) / 2
+
+
+# A ~1km box in central Madrid: small enough to be cheap, real enough to
+# return rows (so every stage of the query actually runs).
+_WARM_BOX = (-3.708, -3.699, 40.412, 40.421)
+
+
+def warm_site_query(buildings_path: str, exposure_path: str) -> int:
+    """Run the scenario's own building query over a tiny box, for /warmup
+    (warmup.py): the first real query in a fresh environment paid ~7.7s
+    for its first batch vs ~2.4s warm (2026-09-25) -- S3 connection
+    setup, both files' parquet footers (kept afterwards by DuckDB's
+    external file cache and parquet metadata cache, db.py), and first
+    use of the join/Arrow code. Returns the row count, for the log."""
+    reader = _query_sites(
+        get_connection(), buildings_path, exposure_path, _WARM_BOX, SITE_BATCH_ROWS
+    )
+    return sum(batch.num_rows for batch in reader)
 
 
 def _cos_deg(degrees: float) -> float:

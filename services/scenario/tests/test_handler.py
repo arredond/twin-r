@@ -177,9 +177,11 @@ def test_importing_the_handler_loads_neither_numba_nor_hazardlib():
     subprocess.run([sys.executable, "-c", code], check=True)
 
 
-def test_init_stays_numba_free_even_with_the_prebuilt_cache_configured(tmp_path: Path):
-    # As in the image: seed() copies the cache at Init, but must not import
-    # numba there (Init is capped at 10s; numba_cache.seed's docstring).
+def test_init_does_no_numba_cache_work_even_with_it_configured(tmp_path: Path):
+    # As in the image, with the prebuilt cache configured: importing the
+    # handler (Lambda's Init, capped at 10s) must neither copy the cache
+    # nor import numba -- numba_cache.prepare() does both, later, right
+    # before the first hazardlib import.
     seed = tmp_path / "seed"
     (seed / "geo_abc").mkdir(parents=True)
     (seed / "geo_abc" / "f.nbi").write_bytes(b"index")
@@ -190,7 +192,7 @@ def test_init_stays_numba_free_even_with_the_prebuilt_cache_configured(tmp_path:
     }
     code = (
         "import sys, os, scenario.handler; "
-        "assert os.path.exists(os.environ['NUMBA_CACHE_DIR']), 'not seeded'; "
+        "assert not os.path.exists(os.environ['NUMBA_CACHE_DIR']), 'seeded at Init'; "
         "loaded = {'numba', 'openquake.hazardlib'} & set(sys.modules); "
         "assert not loaded, loaded"
     )

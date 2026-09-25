@@ -403,8 +403,7 @@ async def _joined_tile(
 @app.get("/warmup")
 def warmup() -> dict:
     """See warmup.py: the frontend's fire-and-forget call on page load."""
-    data_paths = (BUILDINGS_PATH, EXPOSURE_PATH, FRAGILITY_PATH, FAULTS_PATH)
-    return warm_up(needs_httpfs=any(p.startswith("s3://") for p in data_paths))
+    return warm_up(BUILDINGS_PATH, EXPOSURE_PATH)
 
 
 @app.get("/health")

@@ -10,9 +10,8 @@ from scratch: ~65s of the first scenario request per container in the
 2026-09-24 cache-warm sweep (70-81s total, vs. 4-8s warm), 16-46s locally.
 
 So the image builds the cache (`python -m scenario.numba_cache`, see
-services/scenario/Dockerfile) and `seed()`, called when the handler module
-loads, copies it into the writable `NUMBA_CACHE_DIR` before anything
-imports hazardlib. Two things make a build-time cache valid at runtime:
+services/scenario/Dockerfile) and `prepare()`, called right before the first
+hazardlib import, copies it into the writable `NUMBA_CACHE_DIR`. Two things make a build-time cache valid at runtime:
 
 - `NUMBA_CPU_NAME=generic` (set in the Dockerfile, so at build *and*
   runtime): numba keys cache entries by CPU model and features, and the
@@ -41,19 +40,33 @@ SEED_DIR_ENV = "TWINER_NUMBA_CACHE_SEED"
 _seeded_at: float | None = None
 
 
-def seed() -> None:
-    """Once per execution environment, during Init: make numba use the
-    image's prebuilt cache. A no-op outside the image (local dev keeps
-    numba's normal writable cache).
+def prepare() -> None:
+    """Make numba use the image's prebuilt cache: seed it (once per
+    execution environment) and switch to size-only source stamps. Call it
+    right before hazardlib is first imported (handler.py's
+    `_import_hazardlib`, warmup.py). A no-op outside the image.
 
-    Only copies: it must not import numba, because Init is capped at 10s
-    and already ran 9.8s on the first environments after a deploy
-    (2026-09-25) when this also applied `use_size_only_source_stamps`.
-    That patch is applied right before hazardlib is imported instead
-    (handler.py's `_import_hazardlib`, and `warm`), which is all it needs.
+    Deliberately not at Init (module import): Init is capped at 10s, and
+    on the first environments after a deploy, when the image itself is
+    still being fetched, it ran 9.8s with both steps in it and 8.8s with
+    just the copy (2026-09-25). Neither needs to happen before the first
+    request that imports hazardlib."""
+    seed()
+    use_size_only_source_stamps()
+
+
+def seed() -> None:
+    """Copy the image's prebuilt cache into `NUMBA_CACHE_DIR`, once per
+    execution environment (idempotent). A no-op outside the image (local
+    dev keeps numba's normal writable cache). Use `prepare()`, which also
+    applies the stamps the copy needs.
+
     The copy is skipped if `NUMBA_CACHE_DIR` already exists, because Lambda
-    can re-run Init in an environment whose `/tmp` survived; the stamps
-    applied later make that copy usable too."""
+    can re-run Init in an environment whose `/tmp` survived; the size-only
+    stamps make that copy usable too."""
+    global _seeded_at
+    if _seeded_at is not None:
+        return
     seed_dir = os.environ.get(SEED_DIR_ENV)
     cache_dir = os.environ.get("NUMBA_CACHE_DIR")
     if not seed_dir or not cache_dir:
@@ -72,7 +85,6 @@ def seed() -> None:
         print(f"numba_cache: seeded {cache_dir} from {seed_dir} in {time.monotonic() - t0:.2f}s")
     else:
         print(f"numba_cache: {cache_dir} already present (re-run Init), not re-seeding")
-    global _seeded_at
     _seeded_at = time.time()
 
 
@@ -80,10 +92,8 @@ def use_size_only_source_stamps() -> None:
     """In the image only (a no-op unless `TWINER_NUMBA_CACHE_SEED` is set):
     make numba stamp each source file by its size alone, not by
     `(st_mtime, st_size)`. Must run before hazardlib is imported, both at
-    build (`warm`, writing the cache) and at runtime (handler.py's
-    `_import_hazardlib`, and `warm` via /warmup, reading it), so the two
-    agree. Idempotent. Not called from `seed()`: importing numba there
-    would put it in Lambda's Init phase (see `seed`).
+    build (`warm`, writing the cache) and at runtime (`prepare`, reading
+    it), so the two agree. Idempotent.
 
     Why: numba only trusts a cache entry whose source file's stamp matches
     the one recorded when the entry was written, and file modification
