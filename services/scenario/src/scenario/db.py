@@ -58,26 +58,18 @@ def get_connection() -> duckdb.DuckDBPyConnection:
             if _con is None:
                 extension_dir = os.environ.get(EXTENSION_DIR_ENV)
                 _con = duckdb.connect(
+                    # Bundled means complete: never try to fetch a missing
+                    # one at query time either. No `parquet_metadata_cache`
+                    # here: setting it at connect needs the parquet
+                    # extension already loaded, which it isn't this early
+                    # in the image, and it failed every connection in prod
+                    # (2026-09-25, ADR-0022's follow-up).
                     config={
-                        # Keep each parquet file's parsed footer across
-                        # queries (DuckDB re-reads and re-parses it per
-                        # query by default): every scenario reads the same
-                        # buildings/exposure files, and /warmup's query
-                        # (engine.warm_site_query) then leaves the next
-                        # scenario nothing to fetch but data. DuckDB
-                        # invalidates an entry if its file changes.
-                        "parquet_metadata_cache": True,
-                        # Bundled means complete: never try to fetch a
-                        # missing one at query time either.
-                        **(
-                            {
-                                "extension_directory": extension_dir,
-                                "autoinstall_known_extensions": False,
-                            }
-                            if extension_dir
-                            else {}
-                        ),
+                        "extension_directory": extension_dir,
+                        "autoinstall_known_extensions": False,
                     }
+                    if extension_dir
+                    else {}
                 )
             cursor = _con.cursor()
         _thread_local.cursor = cursor

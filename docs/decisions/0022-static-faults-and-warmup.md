@@ -90,9 +90,19 @@ buildings took ~7.7s vs ~2.4s warm. That's S3 connection setup, both
 parquet files' footers, and the first run of the join and Arrow
 conversion. `/warmup` now also runs the scenario's own building query
 (`engine.warm_site_query`, sharing `engine._query_sites` with the real
-path) over a ~1km box in central Madrid. The connection enables DuckDB's
-`parquet_metadata_cache` (db.py), so the parsed footers carry over to the
-real query, alongside the byte ranges DuckDB's external file cache (on by
-default) already keeps. Locally, the query takes 0.2s for 1,167 buildings,
-and the cache setting is neutral on local disk; its benefit is over S3.
+path) over a ~1km box in central Madrid. DuckDB's external file cache (on
+by default) keeps the byte ranges it read, footers included, for the real
+query. Locally, the query takes 0.2s for 1,167 buildings.
+
+An earlier version of this also enabled `parquet_metadata_cache` in the
+connection config (db.py). In the image, where extensions come only from
+the bundled directory with autoinstall off, setting it at connect time
+fails ("the parquet extension needs to be loaded"). That failed **every**
+database connection in prod after the 10:39 UTC deploy on 2026-09-25:
+all scenarios, `/buildings` and `/warmup` returned 502. It passed locally
+because macOS's DuckDB has parquet loaded already. It was removed. It had
+shown no measurable benefit locally, and the default file cache already
+keeps the footer bytes. Lesson: anything touching DuckDB's connection
+config gets run inside the built image before deploying, not just
+locally.
 `/warmup`'s log line splits the numba/hazardlib time from the query time.
