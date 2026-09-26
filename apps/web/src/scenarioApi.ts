@@ -147,8 +147,24 @@ async function getScenario(path: string, params: Record<string, string | number>
   return resp.json();
 }
 
+// Coordinates straight off a MapLibre click/center carry ~15 decimals
+// (e.g. 40.394511287068866), i.e. sub-nanometre "precision" -- noise in
+// the request, and in a manual scenario's content-addressed scenario_id,
+// which then never repeats for two clicks on the same spot. 5 decimals is
+// ~1.1 m of latitude and ~0.85 m of longitude at Spanish latitudes (36-44
+// degN), well under building scale.
+const COORD_DECIMALS = 5;
+
+export function roundCoord(deg: number): number {
+  return Number(deg.toFixed(COORD_DECIMALS));
+}
+
 export function runManualScenario(req: ManualRuptureRequest): Promise<ScenarioResult> {
-  return postScenario("/scenarios/manual", req);
+  return postScenario("/scenarios/manual", {
+    ...req,
+    lat: roundCoord(req.lat),
+    lon: roundCoord(req.lon),
+  });
 }
 
 // "Automatic" mode (docs/merisur.md §4.1): pick a QAFI fault, run its
@@ -170,7 +186,7 @@ export function runFaultScenario(
   return getScenario("/scenarios/fault", {
     fault_id: fault.fault_id,
     probability_level: probabilityLevel,
-    ...(!fault.has_rupture_geometry && near ? { near_lat: near.lat, near_lon: near.lon } : {}),
+    ...(!fault.has_rupture_geometry && near ? { near_lat: roundCoord(near.lat), near_lon: roundCoord(near.lon) } : {}),
   });
 }
 

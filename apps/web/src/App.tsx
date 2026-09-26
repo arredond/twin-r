@@ -4,6 +4,7 @@ import { RuptureForm, type ManualParams } from "./components/RuptureForm";
 import { PROBABILITY_LEVEL_LABELS } from "./probabilityLevels";
 import { DamageLegend } from "./components/DamageLegend";
 import {
+  roundCoord,
   listFaults,
   warmUpScenarioApi,
   runFaultScenario,
@@ -140,7 +141,9 @@ export default function App() {
   // deliberately pick "Manual" first.
   function handleMapClick(lat: number, lon: number) {
     if (mode !== "manual") return;
-    setManualParams((p) => ({ ...p, lat, lon }));
+    // Rounded here too (not just in scenarioApi.ts) so the form's lat/lon
+    // inputs show the same value that will actually be sent.
+    setManualParams((p) => ({ ...p, lat: roundCoord(lat), lon: roundCoord(lon) }));
   }
 
   return (
