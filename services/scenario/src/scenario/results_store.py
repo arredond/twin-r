@@ -33,8 +33,9 @@ import gzip
 import json
 import os
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from tiles import scenario_results
 
@@ -71,11 +72,12 @@ def write_municipality_stats(scenario_id: str, stats: list[dict]) -> None:
     _write_status(scenario_id, municipal_stats_ready=True)
 
 
-def write_buildings(scenario_id: str, columns: Mapping[str, Sequence]) -> None:
-    """`columns`: the listed buildings, one sequence per
-    `scenario_results.COLUMNS` entry (e.g. a pyarrow Table's `to_pydict()`)."""
+def write_buildings(scenario_id: str, columns: Mapping[str, Any]) -> None:
+    """`columns`: the listed buildings, one column per
+    `scenario_results.COLUMNS` entry, already sorted and unique by
+    building_id (response.stored_results_columns)."""
     path = scenario_dir(scenario_id) / scenario_results.FILENAME
-    path.write_bytes(scenario_results.encode(columns))
+    path.write_bytes(scenario_results.encode_sorted_unique(columns))
     _write_status(scenario_id, buildings_ready=True)
 
 

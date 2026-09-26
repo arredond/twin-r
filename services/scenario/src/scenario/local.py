@@ -25,7 +25,7 @@ from .engine import summarize_scenario
 from .faults import faults_payload, get_fault, round_near_point, rupture_anchor
 from .ground_motion import estimate_significant_distance_km
 from .probability_level import ProbabilityLevel, resolve_probability_level
-from .response import evaluated_region
+from .response import evaluated_region, stored_results_columns
 from .results_store import (
     init_scenario,
     read_municipality_stats,
@@ -182,7 +182,7 @@ def _run_and_serialize(rupture: Rupture, probability_level: str, scenario_id: st
         # im_type are dropped and damage_state becomes an int code).
         # Written for the tile joins (buildings + debris, ADR-0019), not
         # returned -- the frontend never needs the per-building list.
-        write_buildings(scenario_id, summary.shipped.to_pydict())
+        write_buildings(scenario_id, stored_results_columns(summary.shipped))
         # Fire-and-forget: pays each pool worker's cold-cache cost for this
         # scenario now, in the background, rather than on the user's first
         # tile request (see warm_cache's own docstring for why this is

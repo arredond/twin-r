@@ -100,8 +100,11 @@ from __future__ import annotations
 
 import bisect
 import gzip
+import io
 import json
 from collections.abc import Mapping, Sequence
+from itertools import pairwise
+from typing import Any
 
 FORMAT_NAME = "twiner.scenario-results"
 FORMAT_VERSION = 1
@@ -120,32 +123,95 @@ PROPERTY_COLUMNS = ("damage_state_code", *PROBABILITY_COLUMNS)
 COLUMNS = (ID_COLUMN, *PROPERTY_COLUMNS)
 
 
+# Rows per chunk when writing (`encode_sorted_unique`): only one chunk of
+# one column is ever held as Python objects at a time.
+_CHUNK_ROWS = 100_000
+
+
 def encode(columns: Mapping[str, Sequence]) -> bytes:
     """The gzipped file for these columns (exactly `COLUMNS`, equal
     lengths, any row order, ids possibly repeated): sorted by id, one row
-    per id (the last one given), as the format requires."""
+    per id (the last one given), as the format requires.
+
+    Builds the sorted, deduplicated columns as Python lists first, so memory
+    grows with the row count: fine for tests and small scenarios. The
+    scenario function sorts and dedupes in Arrow and calls
+    `encode_sorted_unique` directly instead."""
+    _check_columns(columns)
+    ids = columns[ID_COLUMN]
+    last_row = {building_id: row for row, building_id in enumerate(ids)}  # keep-last
+    order = [last_row[building_id] for building_id in sorted(last_row)]
+    return encode_sorted_unique({name: [columns[name][row] for row in order] for name in COLUMNS})
+
+
+def encode_sorted_unique(columns: Mapping[str, Any]) -> bytes:
+    """The same file as `encode`, for columns whose ids are already sorted
+    and unique (checked while writing: a ValueError otherwise), written
+    column by column in `_CHUNK_ROWS`-row chunks straight into a gzip
+    stream, so memory stays bounded by one chunk plus the compressed
+    output however many rows there are.
+
+    Each column only needs `len()` and slicing, with a slice that is either
+    a list or has `to_pylist()`. So a pyarrow Array/ChunkedArray works as is
+    without this module importing pyarrow (see the module docstring on why
+    it can't).
+
+    Why (2026-09-26): an M9 "very_low" scenario on Madrid lists 3.4M
+    buildings. Converting them to Python objects all at once, as `encode`
+    does, took the scenario function from 1.43GB to a 2.6GB peak locally
+    and OOM-killed it at 3008MB in prod."""
+    _check_columns(columns)
+    n_rows = len(columns[ID_COLUMN])
+    buffer = io.BytesIO()
+    # gzip level 6 (zlib's own default), not gzip.compress's 9: on the M9
+    # Madrid "high" file (24MB of JSON), level 9 took 2.72s, inside the
+    # scenario request, for a file 2% smaller than level 6's 0.46s (2.97MB
+    # vs 3.02MB). Readers decompress either in ~13ms.
+    with gzip.GzipFile(fileobj=buffer, mode="wb", compresslevel=6) as out:
+        # Same document as json.dumps({"format", "version", "columns": {...}})
+        # with compact separators, written a piece at a time.
+        out.write(
+            f'{{"format":{json.dumps(FORMAT_NAME)},"version":{FORMAT_VERSION},"columns":{{'.encode()
+        )
+        for column_index, name in enumerate(COLUMNS):
+            out.write(f"{json.dumps(name)}:[".encode())
+            previous_id = None
+            for start in range(0, n_rows, _CHUNK_ROWS):
+                chunk = _as_list(columns[name][start : start + _CHUNK_ROWS])
+                if name == ID_COLUMN:
+                    previous_id = _check_sorted_unique(chunk, previous_id)
+                if start:
+                    out.write(b",")
+                out.write(json.dumps(chunk, separators=(",", ":"))[1:-1].encode("utf-8"))
+            out.write(b"]" if column_index == len(COLUMNS) - 1 else b"],")
+        out.write(b"}}")
+    return buffer.getvalue()
+
+
+def _check_columns(columns: Mapping[str, Any]) -> None:
     if set(columns) != set(COLUMNS):
         raise ValueError(f"expected columns {COLUMNS}, got {tuple(columns)}")
-    ids = columns[ID_COLUMN]
     lengths = {name: len(values) for name, values in columns.items()}
     if len(set(lengths.values())) != 1:
         raise ValueError(f"columns differ in length: {lengths}")
 
-    last_row = {building_id: row for row, building_id in enumerate(ids)}  # keep-last
-    order = [last_row[building_id] for building_id in sorted(last_row)]
-    document = {
-        "format": FORMAT_NAME,
-        "version": FORMAT_VERSION,
-        "columns": {name: [columns[name][row] for row in order] for name in COLUMNS},
-    }
-    # Compact separators: the arrays are most of the file. gzip level 6
-    # (zlib's own default), not gzip.compress's 9: on the M9 Madrid file
-    # (24MB of JSON), level 9 took 2.72s, inside the scenario request, for
-    # a file 2% smaller than level 6's 0.46s (2.97MB vs 3.02MB). Readers
-    # decompress either in ~13ms.
-    return gzip.compress(
-        json.dumps(document, separators=(",", ":")).encode("utf-8"), compresslevel=6
-    )
+
+def _as_list(chunk: Any) -> list:
+    return chunk.to_pylist() if hasattr(chunk, "to_pylist") else list(chunk)
+
+
+def _check_sorted_unique(ids: list, previous: str | None) -> str | None:
+    """The last id of this chunk, after checking the chunk continues a
+    strictly increasing sequence -- the order `ScenarioResults.get`'s
+    binary search relies on."""
+    if not ids:
+        return previous
+    if previous is not None and not previous < ids[0]:
+        raise ValueError(f"building_id not sorted/unique: {previous!r} then {ids[0]!r}")
+    for a, b in pairwise(ids):
+        if not a < b:
+            raise ValueError(f"building_id not sorted/unique: {a!r} then {b!r}")
+    return ids[-1]
 
 
 class ScenarioResults:

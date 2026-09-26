@@ -26,12 +26,13 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Mapping, Sequence
-from functools import lru_cache
+from collections.abc import Callable, Mapping
+from typing import Any
 
 import boto3  # pyrefly: ignore -- Lambda-runtime-provided, unresolvable for local type checking
 
 from . import scenario_results
+from .results_cache import ResultsCache
 from .scenario_results import ScenarioResults
 
 
@@ -77,13 +78,16 @@ def write_municipality_stats(bucket: str, scenario_id: str, stats: list[dict]) -
     _write_status(bucket, scenario_id, municipal_stats_ready=True)
 
 
-def write_buildings(bucket: str, scenario_id: str, columns: Mapping[str, Sequence]) -> None:
-    """`columns`: the listed buildings, one sequence per
-    `scenario_results.COLUMNS` entry (e.g. a pyarrow Table's `to_pydict()`)."""
+def write_buildings(bucket: str, scenario_id: str, columns: Mapping[str, Any]) -> None:
+    """`columns`: the listed buildings, one column per
+    `scenario_results.COLUMNS` entry, already sorted and unique by
+    building_id (scenario.response.stored_results_columns). Any sliceable
+    column works, e.g. pyarrow arrays, without this module importing
+    pyarrow (see `scenario_results.encode_sorted_unique`)."""
     _client().put_object(
         Bucket=bucket,
         Key=_key(scenario_id, scenario_results.FILENAME),
-        Body=scenario_results.encode(columns),
+        Body=scenario_results.encode_sorted_unique(columns),
         ContentType="application/json",
         ContentEncoding="gzip",
     )
@@ -114,26 +118,30 @@ def read_response(bucket: str, scenario_id: str) -> dict | None:
     return json.loads(obj["Body"].read())
 
 
-# Deliberately tiny. One scenario's results can be hundreds of MB once
-# parsed into Python dicts (an M9 manual scenario on Madrid: 448,557 rows,
-# ~326MB peak / ~206MB held), and the cache holds them for the container's
-# whole lifetime. At 64 entries, every scenario a container ever served
-# stayed resident until it was OOM-killed at 512MB (2026-09-24, 10
-# `Runtime.OutOfMemory`s). Two covers switching back and forth between a
-# pair of scenarios; anything older is re-read from S3 if revisited.
-RESULTS_CACHE_SCENARIOS = 2
+# Bounded by memory, not by count: one scenario's decoded results range
+# from a few MB to 1.34GB (see results_cache.py). Lives as long as this
+# Lambda execution environment, so a container reads each scenario's file
+# once, not once per tile.
+_RESULTS_CACHE = ResultsCache()
 
 
-@lru_cache(maxsize=RESULTS_CACHE_SCENARIOS)
 def read_building_results(bucket: str, scenario_id: str) -> ScenarioResults:
     """The scenario's listed buildings, looked up by building_id per tile
     (`ScenarioResults.get`) -- the S3 equivalent of services/scenario/
-    tile_join.py's `_building_results`. Cached per (bucket, scenario_id)
-    for this Lambda execution environment's lifetime, so a container reads
-    a scenario's file once, not once per tile."""
-    s3 = _client()
-    try:
-        obj = s3.get_object(Bucket=bucket, Key=_key(scenario_id, scenario_results.FILENAME))
-    except s3.exceptions.NoSuchKey as e:
-        raise FileNotFoundError(f"no results for scenario_id {scenario_id!r}") from e
-    return ScenarioResults.from_bytes(obj["Body"].read())
+    tile_join.py's `_building_results`."""
+
+    def fetch() -> tuple[int, Callable[[], bytes]]:
+        s3 = _client()
+        try:
+            obj = s3.get_object(Bucket=bucket, Key=_key(scenario_id, scenario_results.FILENAME))
+        except s3.exceptions.NoSuchKey as e:
+            raise FileNotFoundError(f"no results for scenario_id {scenario_id!r}") from e
+        # The size is known before the body is read, so the cache can make
+        # room before anything is decoded.
+        return obj["ContentLength"], obj["Body"].read
+
+    key = (bucket, scenario_id)
+    if (cached := _RESULTS_CACHE.get(key)) is not None:
+        return cached
+    size, read = fetch()
+    return _RESULTS_CACHE.get_or_load(key, size, read)

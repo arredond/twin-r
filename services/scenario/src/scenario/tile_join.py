@@ -31,6 +31,7 @@ from pathlib import Path
 
 from pmtiles.reader import Compression, MmapSource, Reader
 from tiles import scenario_results
+from tiles.results_cache import ResultsCache
 from tiles.scenario_results import ScenarioResults
 from tiles.tile_join import join_debris_tile_bytes, join_tile_bytes
 
@@ -46,31 +47,28 @@ def _pmtiles_reader(path: str) -> Reader:
     return Reader(MmapSource(f))
 
 
+# Bounded by memory, not by count, per tile-pool worker process: the same
+# cache as the tiles Lambda's (tiles.results_cache).
+_RESULTS_CACHE = ResultsCache()
+
+
 def _building_results(scenario_id: str) -> ScenarioResults:
-    """See `_load_building_results`. Keyed on the file's mtime as well as
-    `scenario_id`: ids are content-addressed (scenario_id.py), so with the
-    scenario cache off a rerun rewrites the *same* scenario_id's file --
-    e.g. after regenerating local data without bumping TWINER_DATA_VERSION
-    -- and a pool worker's cache must not keep serving the old rows."""
+    """The scenario's listed buildings, looked up by building_id per tile.
+    Cached so repeated tile requests for the same scenario -- the normal
+    case, as a user pans/zooms -- don't re-read the results file each time.
+    Same file and decoder as the tiles Lambda (`tiles.scenario_results`,
+    which documents the format), so the two runtimes can't drift on it.
+
+    Keyed on the file's mtime as well as `scenario_id`: ids are
+    content-addressed (scenario_id.py), so with the scenario cache off a
+    rerun rewrites the *same* scenario_id's file -- e.g. after regenerating
+    local data without bumping TWINER_DATA_VERSION -- and a pool worker's
+    cache must not keep serving the old rows."""
     path = scenario_dir(scenario_id) / scenario_results.FILENAME
     if not path.exists():
         raise FileNotFoundError(f"no results for scenario_id {scenario_id!r}")
-    return _load_building_results(scenario_id, path.stat().st_mtime_ns)
-
-
-# Same size as the tiles Lambda's cache (tiles.results_store's
-# RESULTS_CACHE_SCENARIOS, see its comment): a large scenario's results
-# run to hundreds of MB once parsed, per tile-pool worker process here.
-@lru_cache(maxsize=2)
-def _load_building_results(scenario_id: str, mtime_ns: int) -> ScenarioResults:
-    """The scenario's listed buildings, looked up by building_id per tile.
-    Cached per scenario_id so repeated tile requests for the same scenario
-    -- the normal case, as a user pans/zooms -- don't re-read the results
-    file each time. Same file and decoder as the tiles Lambda
-    (`tiles.scenario_results`, which documents the format and why it's
-    column-oriented JSON), so the two runtimes can't drift on it."""
-    path = scenario_dir(scenario_id) / scenario_results.FILENAME
-    return ScenarioResults.from_bytes(path.read_bytes())
+    st = path.stat()
+    return _RESULTS_CACHE.get_or_load((scenario_id, st.st_mtime_ns), st.st_size, path.read_bytes)
 
 
 def warm_cache(pmtiles_path: str | Path, scenario_id: str) -> None:

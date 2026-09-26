@@ -1,5 +1,6 @@
 import gzip
 import json
+import types
 from pathlib import Path
 
 import pytest
@@ -94,3 +95,34 @@ def test_module_is_stdlib_only():
     source = Path(scenario_results.__file__).read_text()
     for heavy in ("pandas", "pyarrow", "numpy"):
         assert f"import {heavy}" not in source and f"from {heavy}" not in source
+
+
+def test_encode_sorted_unique_writes_the_same_file_from_sliceable_columns_in_chunks(monkeypatch):
+    # The scenario function's path: Arrow columns already sorted/unique,
+    # written a chunk at a time (tiles.scenario_results._CHUNK_ROWS).
+    monkeypatch.setattr(scenario_results, "_CHUNK_ROWS", 2)
+
+    class Sliceable:  # only len() and slicing into something with to_pylist()
+        def __init__(self, values):
+            self.values = values
+
+        def __len__(self):
+            return len(self.values)
+
+        def __getitem__(self, rows):
+            return types.SimpleNamespace(to_pylist=lambda: self.values[rows])
+
+    rows = [_row(b, i % 5) for i, b in enumerate(["a", "b", "c", "d", "e"])]
+    chunked = scenario_results.encode_sorted_unique(
+        {name: Sliceable(values) for name, values in _columns(rows).items()}
+    )
+    assert json.loads(gzip.decompress(chunked)) == json.loads(
+        gzip.decompress(encode(_columns(rows)))
+    )
+
+
+def test_encode_sorted_unique_rejects_unsorted_or_repeated_ids_even_across_chunks(monkeypatch):
+    monkeypatch.setattr(scenario_results, "_CHUNK_ROWS", 2)
+    for ids in (["a", "c", "b", "d"], ["a", "b", "b", "c"], ["a", "c", "c", "d"]):
+        with pytest.raises(ValueError, match="not sorted/unique"):
+            scenario_results.encode_sorted_unique(_columns([_row(b, 1) for b in ids]))

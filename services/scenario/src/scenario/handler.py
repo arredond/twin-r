@@ -36,7 +36,7 @@ from . import numba_cache
 from .building_lookup import get_building
 from .faults import faults_payload, get_fault, round_near_point, rupture_anchor
 from .probability_level import resolve_probability_level
-from .response import evaluated_region
+from .response import evaluated_region, stored_results_columns
 from .rupture import Rupture, from_fault, from_manual_input
 from .scenario_id import cache_enabled, fault_scenario_id, manual_scenario_id
 from .warmup import warm_up
@@ -275,10 +275,12 @@ def _run_and_respond(
         # function. Writes the same layout local dev's results_store.py
         # writes to local disk, so the tiles Lambda (services/tiles) can
         # read a prod scenario's results the same way it reads a local one.
-        # tiles.results_store.write_buildings takes plain Python columns
-        # (`to_pydict()`), not an Arrow table -- that package has to stay
-        # free of pandas/pyarrow to fit Lambda's 250MB zip-package limit
-        # (tiles.scenario_results documents the file it writes).
+        # tiles.results_store.write_buildings takes the listed buildings as
+        # Arrow columns already sorted and unique by building_id
+        # (response.stored_results_columns) and streams them into the file
+        # (tiles.scenario_results.encode_sorted_unique), never all as Python
+        # objects at once -- that package itself stays free of
+        # pandas/pyarrow to fit Lambda's 250MB zip-package limit.
         from tiles.results_store import (
             init_scenario,
             write_buildings,
@@ -288,7 +290,7 @@ def _run_and_respond(
 
         init_scenario(RESULTS_BUCKET, scenario_id)
         write_municipality_stats(RESULTS_BUCKET, scenario_id, municipality_stats)
-        write_buildings(RESULTS_BUCKET, scenario_id, summary.shipped.to_pydict())
+        write_buildings(RESULTS_BUCKET, scenario_id, stored_results_columns(summary.shipped))
         # Last: marks this id as a complete, reusable result (the cache).
         write_response(RESULTS_BUCKET, scenario_id, payload)
 

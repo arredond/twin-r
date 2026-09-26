@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 import pyarrow as pa
+import pyarrow.compute as pc
 from pyproj import Geod
 
 from .damage import DAMAGE_STATES
@@ -69,6 +70,53 @@ def shipped_mask(damage_state_code: np.ndarray, probs: np.ndarray) -> np.ndarray
     `probs` is (len(DAMAGE_STATES), n), rows in DAMAGE_STATES order."""
     is_close_call = (probs[0] - probs[1:].max(axis=0, initial=0.0)) < UNCERTAINTY_MARGIN
     return (damage_state_code != 0) | is_close_call
+
+
+def stored_results_columns(shipped: pa.Table) -> dict[str, _RowsInOrder]:
+    """`shipped` (one row per listed building, from `shipped_buildings_table`
+    batches) as the columns the per-building results file stores: one row
+    per building_id, keeping the last, sorted by building_id. Those are the
+    invariants `tiles.scenario_results.encode_sorted_unique` needs.
+
+    Without materializing a sorted copy of the table: this computes only
+    the row order (a stable sort of the ids, then drops all but the last
+    of any repeated id), and each column is read in that order one chunk
+    at a time as the encoder asks for it (`_RowsInOrder`). A scenario can
+    list millions of buildings (3.4M for an M9 "very_low" on Madrid, which
+    OOM-killed the scenario function, 2026-09-26). Converting them to Python
+    objects, or copying the table to sort it, costs about a GB at that
+    size. Arrow sorts strings by their UTF-8 bytes, which is the same order
+    as Python's `<` on `str`, the order the reader's binary search uses."""
+    ids = shipped.column("building_id")
+    # Stable, so among rows sharing an id, the last one given stays last.
+    order = pc.sort_indices(ids)  # pyrefly: ignore -- pyarrow.compute is generated at runtime
+    sorted_ids = ids.take(order)
+    n = len(sorted_ids)
+    if n > 1:
+        # Keep a row unless the next one (in sorted order) has the same id.
+        differs_from_next = pc.not_equal(  # pyrefly: ignore -- generated at runtime
+            sorted_ids.slice(0, n - 1), sorted_ids.slice(1)
+        )
+        keep = pa.concat_arrays([differs_from_next.combine_chunks(), pa.array([True])])
+        order = order.filter(keep)
+    del sorted_ids
+    return {name: _RowsInOrder(shipped.column(name), order) for name in shipped.column_names}
+
+
+class _RowsInOrder:
+    """One column read in a given row order, a slice at a time: what
+    `encode_sorted_unique` needs (`len()` and slicing into something with
+    `to_pylist()`), without ever holding the reordered column whole."""
+
+    def __init__(self, column: pa.ChunkedArray, order: pa.Array):
+        self._column = column
+        self._order = order
+
+    def __len__(self) -> int:
+        return len(self._order)
+
+    def __getitem__(self, rows: slice) -> pa.ChunkedArray:
+        return self._column.take(self._order[rows])
 
 
 def shipped_buildings_table(

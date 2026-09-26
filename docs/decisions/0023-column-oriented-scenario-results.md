@@ -92,3 +92,44 @@ Benchmarked on the same file (the module docstring has the full table):
   cost note in decision 2.
 - `tile_join` now takes any `ResultsLookup` (anything with
   `.get(building_id)`), so `ScenarioResults` and a plain dict both work.
+
+## Follow-up (2026-09-26): millions of listed buildings
+
+An M9 "very_low" manual scenario on Madrid lists **3.4M** buildings, 7.6x
+the "high" one above: the 85th-percentile damage state counts most
+buildings as damaged. It OOM-killed the scenario function
+(`Runtime.OutOfMemory` at 3008MB after 27s). A slightly smaller one that
+succeeded logged `write 22.1s`. Computing it was fine (streamed, ADR-0020,
+1.43GB). Writing it wasn't: `to_pydict()` plus `encode` turned all 3.4M
+rows into Python objects, +1.48GB on top of the table.
+
+- **Bounded-memory writer.** `scenario.response.stored_results_columns`
+  computes only the row order in Arrow: a stable sort of the ids, then
+  dropping all but the last of any repeated id. It never builds a sorted
+  copy of the table. `tiles.scenario_results.encode_sorted_unique` then
+  writes each column in 100k-row chunks straight into a gzip stream,
+  checking the sort order as it goes. It reads the Arrow columns through
+  that row order a chunk at a time, while staying stdlib only. The file
+  format is unchanged, so no `API_VERSION` bump. On a frozen copy of that
+  scenario's 3,419,468 rows: +188MB above the table instead of +1,476MB,
+  6.3s instead of 7.4s, and an identical document. In the built image
+  under a 3008MB memory cap, as a stand-in for the Lambda: the previous
+  code was killed (exit 137); the new code wrote the 29.2MB file and
+  returned 200.
+- **The tiles-side cache is bounded by memory, not by count**
+  (`tiles.results_cache.ResultsCache`, used by the tiles Lambda and local
+  dev's tile workers). That file decodes to +1.34GB, so two of them didn't
+  fit the tiles Lambda's 1769MB with `lru_cache(maxsize=2)`. The cache
+  keeps entries within 1GB, evicting least recently used first. It makes
+  room *before* decoding, from an estimate based on the compressed size
+  (known from S3's `ContentLength` before the body is read), so an old and
+  a new large scenario are never in memory together. The entry just
+  loaded is always kept, even if it alone exceeds the budget. Estimates
+  come from fresh-process measurements: 411-435 bytes held per building,
+  46-64 per compressed byte; the constants use the upper ends.
+
+Still open, and the structural fix if scenarios this size become common:
+results split per map tile (see Alternatives), so a tile request reads
+only its own rows. With the tiles Lambda holding one 1.34GB scenario at a
+time, a container's first tile for it costs roughly the decode, about
+1s locally and probably a few seconds on Lambda.
